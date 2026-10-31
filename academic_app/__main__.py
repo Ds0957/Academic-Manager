@@ -1,4 +1,5 @@
-"""python -m academic_app: abre el asistente de configuración en el navegador."""
+"""python -m academic_app: abre en el navegador el panel del día a día, o el asistente de
+configuración si la configuración todavía no está completa."""
 import argparse
 import sys
 import webbrowser
@@ -18,7 +19,11 @@ def main(argv=None):
     srv = server.create(wizard)
     wizard.start_update_check()  # en segundo plano; sin internet no pasa nada
     minutes = int(server.IDLE_SECONDS // 60)
-    print("Asistente de configuración de Academic Manager.", flush=True)
+    if wizard.complete():
+        wizard.land_on_panel()  # el enlace con la clave pone la cookie y luego lleva al panel
+        print("Academic Manager: se abre el panel del día a día.", flush=True)
+    else:
+        print("Asistente de configuración de Academic Manager.", flush=True)
     print("Si el navegador no se abre solo, copie esta dirección en él:", srv.url, flush=True)
     print(f"Para terminar pulse «Cerrar el asistente» en la página; se cierra solo tras {minutes} "
           "minutos sin uso.", flush=True)

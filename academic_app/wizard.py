@@ -8,7 +8,9 @@
   permiso de escritura para publicar la base cuando no hay cuenta de servicio);
 - materias: academic_store.bootstrap (base nueva para quien empieza de cero), canvas_sync.semester
   (lista, onboard) y workbook_enrollment (publicación);
-- tarea diaria: scripts/install-canvas-daily-task.ps1 vía academic_app.daily_task.
+- tarea diaria: scripts/install-canvas-daily-task.ps1 vía academic_app.daily_task;
+- panel del día a día (solo lectura): academic_access today/summary/subject_brief y
+  academic_projects.render_all, vía academic_app.panel.
 
 El estado de cada paso se lee de los archivos reales, así que el asistente se puede
 cerrar y retomar. Nunca se muestran tokens, secretos ni códigos de Google.
@@ -26,6 +28,7 @@ from pathlib import Path
 
 from academic_config import paths
 
+from . import panel
 from .pages import Response, badge, csrf_field, esc, layout, notice
 
 SEMESTER = re.compile(r"20\d{2}-[1-3]")
@@ -36,6 +39,9 @@ STEPS = (("datos", "Carpeta de datos", "/paso/datos"),
          ("drive", "Carpeta de Drive", "/paso/drive"),
          ("materias", "Materias", "/paso/materias"),
          ("tarea", "Sincronización diaria", "/paso/tarea"))
+# Configuración completa para abrir el panel (equipo y tarea solo se conocen al abrirlos).
+COMPLETE_STEPS = ("datos", "canvas", "google", "drive", "materias")
+SUBJECT_PAGE = "/panel/materia/"
 RELOGIN_HINT_DAYS = 6
 NEED_DATA = "Primero elija la carpeta de datos (paso 1)."
 
@@ -109,7 +115,13 @@ def _defaults():
     from canvas_sync import semester, workbook_enrollment
     from capture.sources import auth as drive_auth
     from . import updates
-    return {"check_update": updates.check, "download_update": updates.download,
+    from academic_access import brief, summary, today
+    from academic_projects.__main__ import render_all
+    from canvas_sync.routine import workbook_version
+    return {"panel_today": today.today, "panel_summary": summary.summary,
+            "panel_brief": brief.subject_brief, "panel_instructions": render_all,
+            "workbook_version": workbook_version,
+            "check_update": updates.check, "download_update": updates.download,
             "launch_update": updates.launch,
             "canvas_client": Client, "canvas_courses": semester.list_canvas_courses,
             "drive_login": functools.partial(drive_auth.login, write=True), "check": run_check,
@@ -181,6 +193,7 @@ class Wizard:
         self._check = None  # (estado, detalle, texto) de la última comprobación de esta apertura
         self._task = None   # (estado, detalle) de la tarea diaria, consultada al abrir el paso 7
         self._update = None  # release más nueva conocida en esta apertura (o None)
+        self._landing = None  # «/panel» si el enlace de esta apertura debe llevar al panel
         self.update_thread = None
 
     # --- versión nueva --------------------------------------------------------------------
@@ -374,7 +387,10 @@ class Wizard:
 
     # --- despacho -----------------------------------------------------------------------
     def handle(self, method, path, form, files, csrf):
-        routes = {("GET", "/"): self.page_home, ("POST", "/cerrar"): self.close,
+        routes = {("GET", "/"): self.entry, ("POST", "/cerrar"): self.close,
+                  ("GET", "/panel"): self.panel_today, ("GET", "/panel/resumen"): self.panel_summary,
+                  ("GET", "/panel/materias"): self.panel_subjects,
+                  ("GET", "/panel/instrucciones"): self.panel_instructions,
                   ("POST", "/actualizar"): self.update_now,
                   ("GET", "/paso/datos"): self.page_data, ("POST", "/paso/datos"): self.save_data,
                   ("GET", "/paso/equipo"): self.page_check,
@@ -393,6 +409,8 @@ class Wizard:
                   ("POST", "/paso/materias/indice"): self.retry_index,
                   ("GET", "/paso/tarea"): self.page_task, ("POST", "/paso/tarea"): self.save_task}
         action = routes.get((method, path))
+        if action is None and method == "GET" and path.startswith(SUBJECT_PAGE):
+            action = functools.partial(self.panel_subject, subject=path[len(SUBJECT_PAGE):])
         if action is None:
             return Response(404, layout("No encontrado", notice("Esta página no existe.", bad=True)))
         return action(form=form, files=files, csrf=csrf)
@@ -418,6 +436,30 @@ class Wizard:
         return page(error=str(exc), status=400, **kw)
 
     # --- resumen y cierre ---------------------------------------------------------------
+    def complete(self, steps=None):
+        """Pasos datos, canvas, google, drive y materias hechos y la base igual a la publicada."""
+        steps = steps or self.status()
+        if any(steps[key][0] != "hecho" for key in COMPLETE_STEPS):
+            return False
+        try:
+            self.deps["workbook_version"](self._need_runtime())
+        except Exception as exc:  # noqa: BLE001 — si no se puede comprobar, se abre el asistente
+            print(f"La base no coincide con la publicada ({type(exc).__name__}).", file=sys.stderr, flush=True)
+            return False
+        return True
+
+    def land_on_panel(self):
+        """La primera visita a «/» de esta apertura (tras el enlace con la clave) lleva al panel."""
+        with self._lock:
+            self._landing = "/panel"
+
+    def entry(self, csrf, **kw):
+        with self._lock:
+            landing, self._landing = self._landing, None
+        if landing:
+            return Response(303, location=landing)
+        return self.page_home(csrf, **kw)
+
     def page_home(self, csrf, error=None, status=200, **_):
         steps = self.status()
         rows = []
@@ -426,7 +468,9 @@ class Wizard:
             rows.append(f'<div class="card step"><div><strong>{number}. {esc(title)}</strong> '
                         f'{badge(state)}<br><span class="muted">{esc(detail)}</span></div>'
                         f'<a href="{esc(link)}">Abrir</a></div>')
-        body = (self._update_card(csrf) + (notice(error, bad=True) if error else "")
+        ready = ('<div class="card msg"><p>La configuración está completa. '
+                 '<a href="/panel">Abrir el panel del día a día</a></p></div>') if self.complete(steps) else ""
+        body = (self._update_card(csrf) + (notice(error, bad=True) if error else "") + ready
                 + '<p>Este asistente prepara Academic Manager en este PC paso a paso. Puede cerrarlo '
                 'cuando quiera: lo que ya hizo queda guardado y al volver verá en qué paso va.</p>'
                 + self._take_flash() + "".join(rows)
@@ -1056,6 +1100,162 @@ class Wizard:
             return self.page_task(csrf, error=str(exc), status=400)
         self._task = None
         return self._done("/paso/tarea", "Sincronización diaria activada.")
+
+    # --- panel del día a día (solo lectura) -------------------------------------------
+    def _panel(self, key, title, body, csrf, status=200):
+        return Response(status, layout(title, panel.nav(key) + self._update_card(csrf) + body, back=False))
+
+    def _panel_runtime(self):
+        try:
+            return self._need_runtime()
+        except StepError:
+            return None
+
+    def _panel_setup(self, key, title, csrf):
+        body = (notice(panel.NEED_SETUP, bad=True)
+                + '<p><a href="/">Ir a «Configuración»</a></p>')
+        return self._panel(key, title, body, csrf)
+
+    def _read(self, dep, *args):
+        return panel.read(self.deps[dep], *args)
+
+    def panel_today(self, csrf, **_):
+        runtime = self._panel_runtime()
+        if runtime is None:
+            return self._panel_setup("hoy", "Hoy", csrf)
+        today = self._read("panel_today", runtime)
+        summary = self._read("panel_summary", runtime)
+        names = panel.names_of(summary.value)
+        body = "".join(notice(text) for text in (panel.warnings(summary.value) if summary.value else []))
+        if today.problem:
+            body += panel.problem_card(today)
+        elif today.value["items"]:
+            body += ('<p>Lo primero de la lista es lo más urgente. Para marcar algo como hecho, '
+                     'dígaselo al chat de la materia.</p>' + panel.items_table(today.value["items"], names))
+        else:
+            days = panel.count(today.value.get("dias", 14), "día", "días")
+            body += notice(f"No hay nada pendiente para los próximos {days}.")
+        return self._panel("hoy", "Hoy", body, csrf)
+
+    def panel_summary(self, csrf, **_):
+        runtime = self._panel_runtime()
+        if runtime is None:
+            return self._panel_setup("resumen", "Resumen", csrf)
+        summary = self._read("panel_summary", runtime)
+        if summary.problem:
+            return self._panel("resumen", "Resumen", panel.problem_card(summary), csrf)
+        data = summary.value
+        names = panel.names_of(data)
+        term = data["semestre"]
+        block = f", bloque {term['bloque_activo']}" if term.get("bloque_activo") else ""
+        subjects = "".join(
+            f'<li><a href="/panel/materia/{esc(m["materia_id"])}">{esc(names[m["materia_id"]])}</a>'
+            f' <span class="muted">· última clase: {esc(panel.day_text(m.get("ultima_clase")) or "sin clases")}'
+            '</span></li>' for m in data["materias"])
+        notes = "".join(f'<li>{esc(panel.day_text(n.get("fecha")) or "")} · '
+                        f'{esc(names.get(n["materia_id"], n["materia_id"]))}: {esc(n["texto"])}</li>'
+                        for n in data["reciente"]["notas"])
+        tasks = "".join(f'<li>{esc(t["titulo"])} <span class="muted">· '
+                        + esc(f"fecha límite {panel.day_text(t['fecha_limite'])}" if t.get("fecha_limite")
+                              else "sin fecha límite") + "</span></li>"
+                        for t in data["reciente"]["tareas"])
+        body = (f'<p>Hoy es {esc(panel.day_text(data["fecha"]))}.</p>'
+                + "".join(notice(text) for text in panel.warnings(data))
+                + f'<div class="card"><h2>Semestre {esc(term.get("nombre") or term["semestre_id"])}</h2>'
+                f'<p>{esc(term["semestre_id"])}{esc(block)} · '
+                f'{esc(panel.count(len(data["materias"]), "materia", "materias"))}</p><ul>{subjects}</ul></div>'
+                + '<h2>Lo más urgente</h2>'
+                + (panel.items_table(data["urgente"]["items"], names) or "<p>No hay nada urgente.</p>")
+                + (f"<h2>Notas recientes</h2><ul>{notes}</ul>" if notes else "")
+                + (f"<h2>Tareas abiertas</h2><ul>{tasks}</ul>" if tasks else "")
+                + f'<h2>Sincronización con Canvas</h2><p>{esc(_sync_text(data["sistema"]))}</p>')
+        return self._panel("resumen", "Resumen", body, csrf)
+
+    def panel_subjects(self, csrf, **_):
+        runtime = self._panel_runtime()
+        if runtime is None:
+            return self._panel_setup("materias", "Materias", csrf)
+        summary = self._read("panel_summary", runtime)
+        if summary.problem:
+            return self._panel("materias", "Materias", panel.problem_card(summary), csrf)
+        names = panel.names_of(summary.value)
+        rows = "".join(
+            f'<div class="card step"><div><strong>{esc(names[m["materia_id"]])}</strong><br>'
+            f'<span class="muted">Última clase: {esc(panel.day_text(m.get("ultima_clase")) or "sin clases")}'
+            f'</span></div><a href="/panel/materia/{esc(m["materia_id"])}">Abrir</a></div>'
+            for m in summary.value["materias"])
+        count = panel.count(len(summary.value["materias"]), "materia", "materias")
+        body = f"<p>{esc(count)} en el semestre {esc(summary.value['semestre']['semestre_id'])}.</p>" + rows
+        return self._panel("materias", "Materias", body, csrf)
+
+    def panel_subject(self, csrf, subject, **_):
+        runtime = self._panel_runtime()
+        if runtime is None:
+            return self._panel_setup("materias", "Materia", csrf)
+        summary = self._read("panel_summary", runtime)
+        if summary.problem:
+            return self._panel("materias", "Materia", panel.problem_card(summary), csrf)
+        names = panel.names_of(summary.value)
+        if subject not in names:  # solo materias del semestre activo; nada de la ruta llega a la página
+            body = notice("Esa materia no está en el semestre activo.", bad=True) + \
+                '<p><a href="/panel/materias">Ver sus materias</a></p>'
+            return self._panel("materias", "Materia no encontrada", body, csrf, status=404)
+        title = names[subject]
+        brief = self._read("panel_brief", runtime, subject)
+        if brief.problem:
+            return self._panel("materias", title, panel.problem_card(brief), csrf)
+        data = brief.value
+        grades = "".join(f'<tr><td>{esc(r.get("titulo") or r["actividad_id"])}</td>'
+                         f'<td>{esc(panel.grade_text(r))}</td><td>{esc(r.get("comentario") or "")}</td></tr>'
+                         for r in data["entregas"])
+        tasks = "".join(f'<li>{esc(t["titulo"])} <span class="muted">· '
+                        + esc(f"fecha límite {panel.day_text(t['fecha_limite'])}" if t.get("fecha_limite")
+                              else "sin fecha límite") + "</span></li>" for t in data["tareas"])
+        pending = data["pendientes"]["items"]
+        body = (f'<p class="muted">Semestre {esc(data["materia"].get("semestre_id") or "")} · última clase: '
+                f'{esc(panel.day_text(data["materia"].get("ultima_clase")) or "sin clases")}</p>'
+                + "<h2>Pendientes y fechas</h2>"
+                + (panel.items_table(pending, names) if pending else "<p>No hay nada pendiente.</p>")
+                + ('<h2>Entregas y notas</h2><table class="panel-table"><thead><tr><th>Actividad</th>'
+                   f'<th>Estado</th><th>Comentario</th></tr></thead><tbody>{grades}</tbody></table>'
+                   if grades else "")
+                + (f"<h2>Tareas abiertas</h2><ul>{tasks}</ul>" if tasks else "")
+                + '<h2>Copiar contexto</h2><p>Copie este texto y péguelo al empezar el chat del Project de '
+                  'esta materia en ChatGPT.</p>'
+                + panel.copy_box(f"contexto-{subject}", "Contexto de la materia", panel.brief_text(data)))
+        return self._panel("materias", title, body, csrf)
+
+    def panel_instructions(self, csrf, **_):
+        title = "Instrucciones de los Projects"
+        runtime = self._panel_runtime()
+        if runtime is None:
+            return self._panel_setup("instrucciones", title, csrf)
+        files = self._read("panel_instructions", runtime)
+        if files.problem:
+            return self._panel("instrucciones", title, panel.problem_card(files, csrf), csrf)
+        names = panel.names_of(self._read("panel_summary", runtime).value)
+        boxes = []
+        for name in sorted(files.value, key=lambda n: (n != "coordinador.md", n)):
+            if name == "coordinador.md":
+                ident, label = "coordinador", "Coordinador"
+            else:
+                ident = name.removeprefix("materia-").removesuffix(".md")
+                label = f"{names.get(ident, ident)} ({ident})"
+            boxes.append(f"<h2>{esc(label)}</h2>"
+                         + panel.copy_box(f"instrucciones-{ident}", "Copiar instrucciones", files.value[name]))
+        body = ("<p>Cada cuadro tiene las instrucciones de un Project de ChatGPT. Cópielas en el campo "
+                "«Instrucciones» del Project con el mismo nombre.</p>" + "".join(boxes))
+        return self._panel("instrucciones", title, body, csrf)
+
+
+def _sync_text(system):
+    last = (system or {}).get("ultimo_canvas_sync") or {}
+    stamp = last.get("timestamp_local")
+    if last.get("status") not in ("ok", "error") or not isinstance(stamp, str) or not panel.day_text(stamp[:10]):
+        return "Todavía no hay registro de la sincronización con Canvas en este PC."
+    when = panel.day_text(stamp[:10]) + (f" a las {stamp[11:16]}" if len(stamp) >= 16 else "")
+    result = "sin errores" if last["status"] == "ok" else "con errores"
+    return f"Última sincronización: {when} ({result})."
 
 
 def _version_line():

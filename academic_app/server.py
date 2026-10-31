@@ -30,7 +30,8 @@ DRAIN_LIMIT = 1024 * 1024   # se descarta hasta 1 MB de un cuerpo rechazado para
 IDLE_SECONDS = 30 * 60
 MAX_FIELDS = 200
 CSP = ("default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; "
-       "frame-ancestors 'none'; base-uri 'none'")
+       "frame-ancestors 'none'; base-uri 'none'; "
+       f"script-src '{pages.COPY_SCRIPT_HASH}'")  # solo el botón de copiar del panel
 
 
 def _same(given, expected):

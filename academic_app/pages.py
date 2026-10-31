@@ -1,4 +1,6 @@
-"""HTML del asistente: todo valor dinámico pasa por esc(); sin JavaScript ni recursos externos."""
+"""HTML del asistente: todo valor dinámico pasa por esc(); sin recursos externos y un único script fijo."""
+import base64
+import hashlib
 import html
 from dataclasses import dataclass
 
@@ -36,6 +38,15 @@ pre { white-space: pre-wrap; background:var(--bg); padding:12px; border-radius:8
 table { border-collapse: collapse; width:100%; } td, th { text-align:left; padding:6px 4px;
         border-bottom:1px solid var(--line); vertical-align: top; }
 .inline { display:inline; font-weight:normal; margin-right:14px; }
+.panel-nav { display:flex; flex-wrap:wrap; gap:4px 10px; padding:10px 0 14px; margin-bottom:8px;
+             border-bottom:1px solid var(--line); }
+.panel-nav a { text-decoration:none; } .panel-nav a[aria-current=page] { font-weight:700; color:var(--text); }
+.panel-table { font-size:.95rem; } .panel-table th { font-size:.85rem; color:var(--muted); }
+.copy-box label { margin-top:4px; }
+button.copiar-boton { margin-top:6px; padding:8px 14px; border-radius:8px; border:1px solid var(--line); cursor:pointer; }
+textarea.copiar { width:100%; min-height:12em; padding:10px; border:1px solid var(--line); border-radius:8px;
+                  background:var(--bg); color:var(--text); resize:vertical;
+                  font:14px/1.45 ui-monospace, Consolas, "Cascadia Mono", monospace; }
 """
 
 
@@ -63,12 +74,28 @@ def notice(text, bad=False):
     return f'<div class="card msg{" bad" if bad else ""}" role="status"><p>{esc(text)}</p></div>'
 
 
+# Único script permitido (server.CSP lo autoriza por su hash): copia el cuadro de su botón al
+# portapapeles. El botón empieza oculto; sin el script queda el cuadro para copiar a mano.
+COPY_SCRIPT = (
+    'document.querySelectorAll("button.copiar-boton").forEach(function (b) {'
+    ' var box = document.getElementById(b.dataset.copiar); if (!box) { return; } b.hidden = false;'
+    ' b.addEventListener("click", function () {'
+    ' var done = function (ok) { b.textContent = ok ? "Copiado ✓" :'
+    ' "No se pudo copiar: seleccione el texto y use Ctrl+C"; };'
+    ' if (navigator.clipboard && navigator.clipboard.writeText) {'
+    ' navigator.clipboard.writeText(box.value).then(function () { done(true); },'
+    ' function () { box.select(); done(false); });'
+    ' } else { box.select(); done(false); } }); });')
+COPY_SCRIPT_HASH = "sha256-" + base64.b64encode(hashlib.sha256(COPY_SCRIPT.encode("utf-8")).digest()).decode()
+
+
 def layout(title, body, *, back=True):
     link = '<p><a href="/">← Volver al resumen</a></p>' if back else ""
+    script = f"<script>{COPY_SCRIPT}</script>" if 'class="copiar-boton"' in body else ""
     return (f'<!doctype html><html lang="es"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">'
             f'<title>{esc(title)} · Academic Manager</title><style>{STYLE}</style></head>'
-            f'<body><main>{link}<h1>{esc(title)}</h1>{body}</main></body></html>')
+            f'<body><main>{link}<h1>{esc(title)}</h1>{body}</main>{script}</body></html>')
 
 
 def message_page(text):

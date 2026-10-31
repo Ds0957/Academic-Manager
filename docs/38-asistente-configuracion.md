@@ -12,7 +12,7 @@ El asistente prepara Academic Manager **sin usar la consola**: se abre una pági
 - En la instalación de desarrollo: doble clic en `scripts\academic-app.cmd`.
 - O, desde la carpeta de Academic Manager: `python -m academic_app`. Con `--sin-navegador` solo muestra la dirección.
 
-Se abre el navegador con la página del asistente. Si no se abre solo, la ventana negra muestra una dirección `http://127.0.0.1:…/?clave=…`: cópiela en el navegador. Esa dirección sirve solo para esta apertura.
+Se abre el navegador con la página del asistente. Cuando la configuración ya está completa, se abre en cambio el **panel del día a día** ([41-panel.md](41-panel.md)) y el asistente queda en su pestaña **Configuración**. Si no se abre solo, la ventana negra muestra una dirección `http://127.0.0.1:…/?clave=…`: cópiela en el navegador. Esa dirección sirve solo para esta apertura.
 
 Para terminar pulse **Cerrar el asistente** en la página. Si lo deja abierto sin usarlo, se cierra solo a los 30 minutos.
 
@@ -103,7 +103,7 @@ Los mensajes de error de los módulos técnicos se muestran en lenguaje sencillo
 - Cada apertura genera una clave secreta nueva. El enlace inicial la lleva una vez; luego viaja en una cookie `HttpOnly` y `SameSite=Strict`. Sin la clave, todo responde 403. Cada formulario lleva además un token CSRF. Las comparaciones son en tiempo constante.
 - Nunca muestra ni registra el token de Canvas, el secreto del cliente de Google ni los códigos de Google. El registro de la consola solo dice método, página y código de respuesta.
 - El JSON del cliente se valida igual que en `capture --login-drive` (tipo Desktop, endpoints oficiales de Google) y se guarda solo en `control\drive-oauth\oauth-client.json` de la carpeta de datos, junto a la autorización de Drive, con permisos solo para el usuario. No se hacen copias temporales.
-- Envíos de más de 64 KB se rechazan (413); un envío que no llega completo se abandona a los 15 segundos (408), así no deja el asistente colgado. Solo se aceptan GET y POST. Todo valor que se muestra se escapa. La página no usa JavaScript ni recursos externos (política CSP `default-src 'none'`).
+- Envíos de más de 64 KB se rechazan (413); un envío que no llega completo se abandona a los 15 segundos (408), así no deja el asistente colgado. Solo se aceptan GET y POST. Todo valor que se muestra se escapa. La página no usa recursos externos (política CSP `default-src 'none'`). El único JavaScript es el botón «Copiar» del panel (`pages.COPY_SCRIPT`), autorizado por su hash SHA-256 en `script-src`: cualquier otro script, manejador en línea o script modificado se bloquea. Ese script solo copia al portapapeles el cuadro de texto de su botón.
 - Se cierra con **Cerrar el asistente** o tras 30 minutos sin uso.
 - «Cerrar el asistente» responde aunque otro paso siga en curso (por ejemplo, mientras el inicio de sesión de Google espera al navegador).
 - **Riesgo aceptado:** los navegadores no separan las cookies por puerto, así que la cookie de sesión también se envía a otros servicios que el usuario abra en `127.0.0.1` mientras el asistente está abierto. Solo los programas del propio usuario en ese PC pueden recibirla, y esos ya pueden leer su carpeta de datos; la cookie deja de valer al cerrar el asistente o tras 30 minutos sin uso.
