@@ -189,8 +189,10 @@ class PanelCase(ServerCase):
         self.addCleanup(patcher.stop)
 
     def assert_plain(self, body):
+        # Los nombres de los campos de formulario (name="materia_id") no se ven; sus valores sí cuentan.
+        visible = re.sub(r' name="[a-z_]+"', "", body)
         for raw in RAW + INTERNAL:
-            self.assertNotIn(raw, body)
+            self.assertNotIn(raw, visible)
 
     def assert_nav(self, body):
         for link in ('href="/panel"', 'href="/panel/resumen"', 'href="/panel/materias"',

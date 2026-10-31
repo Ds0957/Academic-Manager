@@ -28,7 +28,7 @@ from pathlib import Path
 
 from academic_config import paths
 
-from . import panel
+from . import forms, panel, registrar
 from .pages import Response, badge, csrf_field, esc, layout, notice
 
 SEMESTER = re.compile(r"20\d{2}-[1-3]")
@@ -42,6 +42,7 @@ STEPS = (("datos", "Carpeta de datos", "/paso/datos"),
 # Configuración completa para abrir el panel (equipo y tarea solo se conocen al abrirlos).
 COMPLETE_STEPS = ("datos", "canvas", "google", "drive", "materias")
 SUBJECT_PAGE = "/panel/materia/"
+PUBLISHING_PAGE = "/panel/publicando/"
 RELOGIN_HINT_DAYS = 6
 NEED_DATA = "Primero elija la carpeta de datos (paso 1)."
 
@@ -118,7 +119,9 @@ def _defaults():
     from academic_access import brief, summary, today
     from academic_projects.__main__ import render_all
     from canvas_sync.routine import workbook_version
-    return {"panel_today": today.today, "panel_summary": summary.summary,
+    from academic_operations import chat
+    return {"write_preview": chat.preview, "write_apply": chat.apply,
+            "panel_today": today.today, "panel_summary": summary.summary,
             "panel_brief": brief.subject_brief, "panel_instructions": render_all,
             "workbook_version": workbook_version,
             "check_update": updates.check, "download_update": updates.download,
@@ -195,6 +198,8 @@ class Wizard:
         self._update = None  # release más nueva conocida en esta apertura (o None)
         self._landing = None  # «/panel» si el enlace de esta apertura debe llevar al panel
         self.update_thread = None
+        # Las publicaciones del panel leen la dependencia al correr: las pruebas pueden sustituirla.
+        self.publisher = registrar.Publisher(lambda *a, **kw: self.deps["write_apply"](*a, **kw))
 
     # --- versión nueva --------------------------------------------------------------------
     def start_update_check(self):
@@ -391,6 +396,8 @@ class Wizard:
                   ("GET", "/panel"): self.panel_today, ("GET", "/panel/resumen"): self.panel_summary,
                   ("GET", "/panel/materias"): self.panel_subjects,
                   ("GET", "/panel/instrucciones"): self.panel_instructions,
+                  ("POST", "/panel/registrar"): self.register_preview,
+                  ("POST", "/panel/registrar/aprobar"): self.register_approve,
                   ("POST", "/actualizar"): self.update_now,
                   ("GET", "/paso/datos"): self.page_data, ("POST", "/paso/datos"): self.save_data,
                   ("GET", "/paso/equipo"): self.page_check,
@@ -411,6 +418,8 @@ class Wizard:
         action = routes.get((method, path))
         if action is None and method == "GET" and path.startswith(SUBJECT_PAGE):
             action = functools.partial(self.panel_subject, subject=path[len(SUBJECT_PAGE):])
+        if action is None and method == "GET" and path.startswith(PUBLISHING_PAGE):
+            action = functools.partial(self.register_status, job=path[len(PUBLISHING_PAGE):])
         if action is None:
             return Response(404, layout("No encontrado", notice("Esta página no existe.", bad=True)))
         return action(form=form, files=files, csrf=csrf)
@@ -1144,8 +1153,10 @@ class Wizard:
                                 (spread.count("sin"), "Sin fecha", "k-todo"))
             if items:
                 body += ('<p class="muted">Agrupado por fecha; dentro de cada grupo, primero lo más urgente. '
-                         'Para marcar algo como hecho, dígaselo al chat de la materia.</p>'
-                         + panel.items_list(items, names, tones, day, grouped=True))
+                         'Para marcar algo como hecho, use los botones de cada tarjeta: antes de guardar verá una vista '
+                         'previa.</p>'
+                         + panel.items_list(items, names, tones, day, grouped=True,
+                                            actions=forms.item_actions(csrf, "/panel")))
             else:
                 days = panel.count(today.value.get("dias", 14), "día", "días")
                 body += panel.empty("Todo al día", f"No hay nada pendiente para los próximos {days}.")
@@ -1254,16 +1265,21 @@ class Wizard:
         pending = data["pendientes"]["items"]
         graded = [r for r in data["entregas"] if r.get("nota") not in (None, "")]
         state_kind = {"pendiente": "k-todo", "en_progreso": "k-info", "entregada": "k-task", "calificada": "k-ok"}
+        back = SUBJECT_PAGE + subject
         grades = "".join(
             f'<li><div class="grow">{esc(r.get("titulo") or r["actividad_id"])}'
             + (f'<small>{esc(r["comentario"])}</small>' if r.get("comentario") else "")
+            + forms.grade_form(csrf, r["actividad_id"], r.get("titulo") or r["actividad_id"], back, current=r,
+                               ident=f'entrega-{r["actividad_id"]}', summary="Cambiar")
             + "</div>" + panel.chip(panel.TRACK.get(r.get("estado"), r.get("estado") or "sin estado"),
                                     state_kind.get(r.get("estado"), ""))
             + (f' {panel.chip(_grade_label(r))}' if _grade_label(r) else "") + "</li>"
             for r in data["entregas"])
         tasks = "".join(f'<li><div class="grow">{esc(t["titulo"])}<small>'
                         + esc(f"fecha límite {panel.day_text(t['fecha_limite'])}" if t.get("fecha_limite")
-                              else "sin fecha límite") + "</small></div>"
+                              else "sin fecha límite") + "</small>"
+                        + forms.task_buttons(csrf, t["tarea_id"], t["titulo"], back, state=t["estado"],
+                                             ident=f'abierta-{t["tarea_id"]}') + "</div>"
                         + panel.chip(panel.TASK.get(t["estado"], t["estado"]), "k-task") + "</li>"
                         for t in data["tareas"])
         tone = tones[subject]
@@ -1273,13 +1289,17 @@ class Wizard:
                            f'{esc(panel.utc_day_text(r.get("creado_utc")) or "sin fecha")}</small></li>' for r in rows)
         decisions, classes = timeline(data["decisiones"]), timeline(data["resumenes_clase"])
         main = ("<h2>Pendientes y fechas</h2>"
-                + (panel.items_list(pending, names, tones, day) if pending
+                + (panel.items_list(pending, names, tones, day, actions=forms.item_actions(csrf, back))
+                   if pending
                    else panel.empty("Nada pendiente", "Esta materia está al día."))
                 + (f'<div class="card"><h2>Entregas y notas</h2><ul class="rows">{grades}</ul></div>' if grades else "")
                 + '<div class="card"><h2>Copiar contexto</h2><p>Copie este texto y péguelo al empezar el chat del '
                   'Project de esta materia en ChatGPT.</p>'
                 + panel.copy_box(f"contexto-{subject}", "Contexto de la materia", panel.brief_text(data)) + "</div>")
-        side = ((f'<div class="card"><h2>Tareas abiertas</h2><ul class="rows">{tasks}</ul></div>' if tasks else "")
+        side = ('<div class="card"><h2>Nueva tarea</h2>' + forms.new_task_form(csrf, subject, back) + "</div>"
+                + '<div class="card"><h2>Nueva decisión o nota</h2>'
+                + forms.new_note_form(csrf, subject, back) + "</div>"
+                + (f'<div class="card"><h2>Tareas abiertas</h2><ul class="rows">{tasks}</ul></div>' if tasks else "")
                 + (f'<div class="card"><h2>Decisiones vigentes</h2><ul class="timeline">{decisions}</ul></div>'
                    if decisions else "")
                 + (f'<div class="card"><h2>Resúmenes de clase</h2><ul class="timeline">{classes}</ul></div>'
@@ -1321,6 +1341,93 @@ class Wizard:
                            subtitle="Cada cuadro tiene las instrucciones de un Project de ChatGPT. Cópielas en el "
                                     "campo «Instrucciones» del Project con el mismo nombre.")
 
+
+    # --- registrar desde el panel (mismo contrato que el chat) -------------------------------
+    def _register_page(self, title, body, csrf, status=200, head=""):
+        return Response(status, layout(title, self._update_card(csrf) + body, back=False,
+                                       nav=panel.nav(None), head=head))
+
+    def _register_problem(self, text, back, csrf, status=400):
+        body = (notice(text, bad=True)
+                + f'<p><a href="{esc(back)}">← Volver</a></p>')
+        return self._register_page("No se pudo registrar", body, csrf, status=status)
+
+    def _register_summary(self, runtime, form, action, request):
+        names = panel.names_of(self._read("panel_summary", runtime).value)
+        label = registrar._first(form, "etiqueta")[:registrar.MAX_TITLE] or None
+        return registrar.describe(action, request, label=label, subject=names.get(request.get("materia_id")),
+                                  day_text=panel.day_text)
+
+    @staticmethod
+    def _summary_html(rows):
+        return ('<dl class="summary-list">'
+                + "".join(f"<dt>{esc(k)}</dt><dd>{esc(v)}</dd>" for k, v in rows) + "</dl>")
+
+    def register_preview(self, form, csrf, **_):
+        back = registrar.back_link(form)
+        runtime = self._panel_runtime()
+        if runtime is None:
+            return self._register_problem(panel.NEED_SETUP, "/", csrf)
+        try:
+            action, request = registrar.request_from(form)
+        except registrar.FormError as exc:
+            return self._register_problem(str(exc), back, csrf)
+        try:
+            plan = self.deps["write_preview"](runtime, action, request)
+        except Exception as exc:  # noqa: BLE001 — se muestra un aviso sencillo, nunca el error
+            registrar.log_failure(exc, "en la vista previa")
+            return self._register_problem(registrar.problem(exc), back, csrf)
+        rows = self._register_summary(runtime, form, action, request)
+        if plan.get("already_applied"):
+            body = (f'<div class="card">{self._summary_html(rows)}</div>'
+                    + notice("Esto ya está registrado así: no hace falta publicar nada.")
+                    + f'<p><a href="{esc(back)}">← Volver</a></p>')
+            return self._register_page("Ya estaba registrado", body, csrf)
+        hidden = "".join(f'<input type="hidden" name="{esc(k)}" value="{esc(registrar._first(form, k))}">'
+                         for k in ("accion", "volver", "etiqueta", *registrar.FIELDS[action])
+                         if registrar._first(form, k))
+        body = ('<p class="muted">Revise lo que se va a guardar. Al aprobar, se escribe en su base y se publica '
+                'en Drive; ChatGPT lo verá en la próxima consulta.</p>'
+                f'<div class="card">{self._summary_html(rows)}'
+                f'<form method="post" action="/panel/registrar/aprobar">{csrf_field(csrf)}{hidden}'
+                f'<input type="hidden" name="plan_id" value="{esc(plan["plan_id"])}">'
+                '<div class="actions"><button>Aprobar y publicar</button>'
+                f'<a href="{esc(back)}">Cancelar</a></div></form></div>')
+        return self._register_page("Revisar antes de publicar", body, csrf)
+
+    def register_approve(self, form, csrf, **_):
+        back = registrar.back_link(form)
+        runtime = self._panel_runtime()
+        if runtime is None:
+            return self._register_problem(panel.NEED_SETUP, "/", csrf)
+        plan_id = registrar._first(form, "plan_id")
+        try:
+            action, request = registrar.request_from(form)
+            if not re.fullmatch(r"[0-9a-f]{64}", plan_id):
+                raise registrar.FormError(registrar.MESSAGES["PLAN_CHANGED"])
+            rows = self._register_summary(runtime, form, action, request)
+            job = self.publisher.start(runtime, action, request, plan_id, rows, back)
+        except registrar.FormError as exc:
+            return self._register_problem(str(exc), back, csrf)
+        return Response(303, location=PUBLISHING_PAGE + job)
+
+    def register_status(self, csrf, job, **_):
+        current = self.publisher.get(job)
+        if current is None:
+            return self._register_problem("Esa publicación ya no está en la lista. Revise el panel para ver si "
+                                          "quedó registrada.", "/panel", csrf, status=404)
+        details = f'<div class="card">{self._summary_html(current.summary)}</div>'
+        back = f'<p><a href="{esc(current.back)}">← Volver</a></p>'
+        if current.state == "publicando":
+            body = ('<div class="card msg" role="status"><p><span class="spinner" aria-hidden="true"></span>'
+                    'Publicando en Drive… Esta página se actualiza sola; puede tardar hasta un par de minutos '
+                    'si la base está ocupada. No hace falta pulsar nada más.</p></div>' + details)
+            return self._register_page("Publicando…", body, csrf, head='<meta http-equiv="refresh" content="2">')
+        if current.state == "listo":
+            body = (f'<div class="card msg ok" role="status"><p>{esc(current.message)}</p>'
+                    + "".join(f"<p>{esc(n)}</p>" for n in current.notes) + "</div>" + details + back)
+            return self._register_page("Listo", body, csrf)
+        return self._register_page("No se pudo publicar", notice(current.message, bad=True) + details + back, csrf)
 
 def _last_class(value, today):
     """'hace 3 días (miércoles 28 de octubre de 2026)' o 'sin clases'."""

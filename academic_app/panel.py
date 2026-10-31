@@ -292,7 +292,7 @@ def chip(text, kind=""):
     return f'<span class="chip {esc(kind)}">{esc(text)}</span>'
 
 
-def item_card(item, names, tones, today):
+def item_card(item, names, tones, today, actions=None):
     subject = item.get("materia_id")
     kind = KIND.get(item["tipo"], "")
     show_subject = item["tipo"] != "materia_descuidada" or subject not in names
@@ -305,7 +305,7 @@ def item_card(item, names, tones, today):
             f'<div class="item-main"><div class="item-top">{chip(TYPES.get(item["tipo"], "Pendiente"), kind)}'
             + (subject_link(subject, names, tones) if show_subject else "")
             + f'</div><h3 class="item-title">{esc(item.get("titulo") or "Sin título")}</h3>'
-            f'<p class="item-meta">{esc(meta)}</p></div>'
+            f'<p class="item-meta">{esc(meta)}</p>' + (actions(item) if actions else "") + "</div>"
             + (f'<div class="rel {rel_class}">{esc(rel)}</div>' if rel else "") + "</article>")
 
 
@@ -318,19 +318,22 @@ def bucket(item, today):
     return "hoy" if n == 0 else "manana" if n == 1 else "semana" if n <= 7 else "despues"
 
 
-def items_list(items, names, tones, today, grouped=False):
-    """Pendientes como tarjetas; agrupados por fecha conservan el orden de urgencia dentro del grupo."""
+def items_list(items, names, tones, today, grouped=False, actions=None):
+    """Pendientes como tarjetas; agrupados por fecha conservan el orden de urgencia dentro del grupo.
+
+    `actions(item)` devuelve los botones de registro de cada tarjeta (o "" si no tiene)."""
     if not items:
         return ""
     if not grouped:
-        return '<div class="items">' + "".join(item_card(i, names, tones, today) for i in items) + "</div>"
+        return ('<div class="items">' + "".join(item_card(i, names, tones, today, actions) for i in items)
+                + "</div>")
     html = []
     for key, title in GROUPS:
         group = [i for i in items if bucket(i, today) == key]
         if group:
             mark = " k-bad" if key == "atrasado" else ""
             html.append(f'<h2 class="group-title{mark}">{esc(title)} <span class="count">{len(group)}</span></h2>'
-                        + items_list(group, names, tones, today))
+                        + items_list(group, names, tones, today, actions=actions))
     return "".join(html)
 
 

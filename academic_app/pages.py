@@ -140,6 +140,29 @@ a.subject:hover { text-decoration:underline; }
 .sync p { margin:0; } .sync .dot { margin-top:.55em; } .sync.ok .dot { background:var(--ok); } .sync.bad .dot { background:var(--bad); }
 .more { display:inline-block; margin-top:12px; font-weight:600; text-decoration:none; }
 .empty { text-align:center; padding:28px 20px; color:var(--muted); }
+.summary-list { display:grid; grid-template-columns:max-content 1fr; gap:8px 18px; margin:0; }
+.summary-list dt { color:var(--muted); font-weight:600; } .summary-list dd { margin:0; overflow-wrap:anywhere;
+                                                                             white-space:pre-wrap; }
+.actions { display:flex; flex-wrap:wrap; gap:10px 16px; align-items:center; margin-top:16px; }
+.actions button { margin-top:0; }
+.spinner { width:18px; height:18px; border-radius:50%; border:3px solid var(--line); border-top-color:var(--accent);
+           display:inline-block; vertical-align:-3px; margin-right:8px; animation:spin 1s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
+select, textarea:not(.copiar), input[type=date] {
+  width:100%; padding:8px 10px; font:inherit; border:1px solid var(--line); border-radius:9px;
+  background:var(--card); color:var(--text); }
+textarea:not(.copiar) { resize:vertical; }
+button.small { padding:5px 12px; font-size:.86rem; margin-top:0; }
+.item-actions { display:flex; flex-wrap:wrap; gap:8px 12px; align-items:flex-start; margin-top:10px; }
+.inline-form { margin:0; } .inline-form label { font-size:.88rem; margin:8px 0 3px; }
+.inline-form > button:not(.small) { margin-top:10px; }
+details.reg { margin-top:6px; } details.reg[open] { flex-basis:100%; }
+details.reg summary { cursor:pointer; color:var(--accent); font-weight:600; font-size:.88rem; }
+details.reg .inline-form { background:var(--soft); border:1px solid var(--line); border-radius:10px;
+                           padding:6px 12px 12px; margin-top:6px; }
+.two { display:grid; grid-template-columns:1fr 1fr; gap:0 10px; }
+.small { font-size:.82rem; margin:6px 0 0; }
+.msg.ok { border-left-color:var(--ok); background:var(--ok-soft); }
 .empty strong { display:block; color:var(--text); font-size:1.1rem; margin-bottom:4px; }
 .copy-box label { margin-top:4px; }
 button.copiar-boton { margin-top:10px; }
@@ -194,7 +217,7 @@ LOGO = ('<svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32
         '<path d="M9.5 16.2v4.6c0 1.6 3 3.2 6.5 3.2s6.5-1.6 6.5-3.2v-4.6L16 19.5l-6.5-3.3Z" fill="#c7c9ff"/></svg>')
 
 
-def layout(title, body, *, back=True, nav="", subtitle="", icon="", wide=False):
+def layout(title, body, *, back=True, nav="", subtitle="", icon="", wide=False, head=""):
     """Página completa: barra superior (marca y, en el panel, sus pestañas) y encabezado."""
     link = '<p><a href="/">← Volver al resumen</a></p>' if back else ""
     script = f"<script>{COPY_SCRIPT}</script>" if 'class="copiar-boton"' in body else ""
@@ -202,7 +225,7 @@ def layout(title, body, *, back=True, nav="", subtitle="", icon="", wide=False):
     main = '<main class="wide">' if wide else "<main>"
     return (f'<!doctype html><html lang="es"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">'
-            f'<title>{esc(title)} · Academic Manager</title><style>{STYLE}</style></head>'
+            f'{head}<title>{esc(title)} · Academic Manager</title><style>{STYLE}</style></head>'
             f'<body><header class="topbar"><div class="topbar-in"><span class="brand">{LOGO}'
             f'Academic Manager</span>{nav}</div></header>'
             f'{main}{link}<div class="page-head">{icon}<div>'
