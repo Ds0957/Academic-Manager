@@ -201,6 +201,24 @@ def _state_id(api, workbook_id):
     return candidates[0]["id"]
 
 
+def _enrollment(active, block, courses):
+    return active, block, sorted((c["course_id"], c["subject_id"], c["semester"], tuple(c.get("blocks") or []))
+                                 for c in courses)
+
+
+def _require_same_enrollment(base, registry):
+    """El registro se hizo sobre otra versión publicada (p. ej. tras una clase de Capture).
+
+    Solo sigue si la base publicada tiene exactamente sus materias, bloques y semestre; si no,
+    el registro está desactualizado de verdad y no se adivina.
+    """
+    from .semester import workbook_courses
+    active, mapped, block = workbook_courses(None, workbook_path=base)
+    if _enrollment(active, block, mapped) != _enrollment(
+            registry.get("active_semester"), registry.get("active_block"), registry.get("courses") or []):
+        raise SyncError("El registro local es más antiguo que el workbook publicado.")
+
+
 def publish(runtime, registry, *, dry_run=True, api=None, planner=plan, writer=mutate):
     """Lock→check→checkpoint→edit→verify→publish→redownload→unlock.
 
@@ -224,8 +242,6 @@ def publish(runtime, registry, *, dry_run=True, api=None, planner=plan, writer=m
     if state.get("canonical_drive_file_id") != file_id:
         raise SyncError("El estado remoto apunta a otro workbook.")
     expected = (state.get("published") or {}).get("sha256")
-    if registry.get("workbook_sha256") and registry["workbook_sha256"] != expected:
-        raise SyncError("El registro local es más antiguo que el workbook publicado.")
     if not expected:
         raise SyncError("Falta hash de la versión canónica.")
     base = folder / "base.sqlite"
@@ -233,6 +249,8 @@ def publish(runtime, registry, *, dry_run=True, api=None, planner=plan, writer=m
     if sha256(base) != expected:
         raise SyncError("El workbook de Drive no coincide con el hash compartido.")
     validate_store(base)
+    if registry.get("workbook_sha256") and registry["workbook_sha256"] != expected:
+        _require_same_enrollment(base, registry)
     changes = planner(base, registry)
     if dry_run:
         return {"mode": "dry_run", "changes": changes, "sha256": expected}
