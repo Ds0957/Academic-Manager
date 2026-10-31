@@ -21,6 +21,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 from urllib.parse import urlencode
 
+from academic_app import version as app_version
 from academic_config import paths
 from canvas_sync import auth as canvas_auth
 from canvas_sync.common import SyncError
@@ -804,8 +805,8 @@ class UpdateStepTests(ServerCase):
         self.downloads = Path(tempfile.mkdtemp()) / "AcademicManager-actualizacion"
         self.addCleanup(__import__("shutil").rmtree, self.downloads.parent, True)
         self.release = updates.Release(
-            "0.2.0", "https://github.com/Ds0957/Academic-Manager/releases/download/v0.2.0/"
-                     "AcademicManager-Setup-0.2.0.exe", hashlib.sha256(UPDATE_DATA).hexdigest(), len(UPDATE_DATA))
+            "9.9.0", "https://github.com/Ds0957/Academic-Manager/releases/download/v9.9.0/"
+                     "AcademicManager-Setup-9.9.0.exe", hashlib.sha256(UPDATE_DATA).hexdigest(), len(UPDATE_DATA))
         self.served = UPDATE_DATA
         self.check_update = MagicMock(return_value=self.release)
         self.launch = MagicMock()
@@ -844,11 +845,11 @@ class UpdateStepTests(ServerCase):
 
     def test_newer_version_shows_a_card_with_both_versions_and_the_button(self):
         self.started()
-        self.check_update.assert_called_once_with("0.1.0")
+        self.check_update.assert_called_once_with(app_version())
         status, _, body = self.get("/")
         self.assertEqual(status, 200)
-        self.assertIn("0.2.0", body)
-        self.assertIn("0.1.0", body)
+        self.assertIn("9.9.0", body)
+        self.assertIn(app_version(), body)
         self.assertIn('action="/actualizar"', body)
         self.assertIn(f'name="csrf" value="{self.server.csrf}"', body)
         self.assertIn("Actualizar ahora", body)
@@ -876,7 +877,7 @@ class UpdateStepTests(ServerCase):
         status, _, body = self.post("/actualizar")
         self.assertEqual(status, 200)
         self.assertIn("instalador", body)
-        expected = self.downloads / "AcademicManager-Setup-0.2.0.exe"
+        expected = self.downloads / "AcademicManager-Setup-9.9.0.exe"
         self.launch.assert_called_once_with(expected)
         self.assertEqual(expected.read_bytes(), UPDATE_DATA)
         self.thread.join(5)
