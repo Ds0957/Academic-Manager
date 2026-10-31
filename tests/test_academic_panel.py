@@ -246,6 +246,50 @@ class PanelPagesTests(PanelCase):
             self.assertIn("1 materia", body)
             self.assertNotIn("1 materias", body)
 
+    def test_today_groups_items_by_date_with_counts_and_relative_days(self):
+        body = self.get("/panel")[2]
+        late, tomorrow, undated = (body.index(f">{title} <span") for title in ("Atrasado", "Mañana", "Sin fecha"))
+        self.assertLess(late, body.index("Taller &lt;uno&gt;"))
+        self.assertLess(body.index("Taller &lt;uno&gt;"), tomorrow)
+        self.assertLess(tomorrow, body.index("Quiz 2"))
+        self.assertLess(body.index("Quiz 2"), undated)
+        self.assertLess(undated, body.index("Comprar libro"))
+        self.assertNotIn(">Hoy <span", body)  # grupos vacíos no aparecen
+        self.assertIn("hace 2 días", body)
+        self.assertIn(">mañana<", body)
+        self.assertIn('<span class="num">1</span><span class="lbl">Atrasado</span>', body)
+        self.assertIn('<span class="num">1</span><span class="lbl">Sin fecha</span>', body)
+
+    def test_each_subject_keeps_its_color_across_pages(self):
+        for path in ("/panel", "/panel/materias"):
+            body = self.get(path)[2]
+            self.assertIn('class="subject t0" href="/panel/materia/MAT-GBD"' if path == "/panel"
+                          else 'class="card subject-card t0" href="/panel/materia/MAT-GBD"', body)
+            self.assertIn("t1", body)
+
+    def test_subjects_page_counts_pending_and_overdue(self):
+        body = self.get("/panel/materias")[2]
+        self.assertIn("1 vencida", body)
+        self.assertIn("1 pendiente<", body)
+        self.assertNotIn("1 pendientes", body)
+        self.assertIn("hace 3 días (miércoles 28 de octubre de 2026)", body)
+
+    def test_subjects_page_without_counts_when_today_fails(self):
+        self.today.side_effect = AccessError("SOURCE_UNAVAILABLE", "La base publicada no está disponible.")
+        status, _, body = self.get("/panel/materias")
+        self.assertEqual(status, 200)
+        self.assertIn('href="/panel/materia/MAT-SO2"', body)
+        self.assertNotIn("pendiente", body)
+        self.assert_plain(body)
+
+    def test_configuration_shows_panel_tabs_only_when_complete(self):
+        self.complete(done=False)
+        self.assertNotIn('class="panel-nav"', self.get("/")[2])
+        self.wizard.complete = lambda steps=None: True
+        body = self.get("/")[2]
+        self.assertIn('class="panel-nav"', body)
+        self.assertIn('href="/" aria-current="page"', body)
+
     def test_subjects_page_links_each_subject(self):
         body = self.get("/panel/materias")[2]
         self.assert_nav(body)
@@ -479,6 +523,21 @@ class CopyButtonTests(PanelCase):
                           "localStorage", "import(", "WebSocket", "sendBeacon"):
             self.assertNotIn(forbidden, script)
         self.assertIn("navigator.clipboard.writeText", script)
+
+
+class VisualHelperTests(unittest.TestCase):
+    def test_relative_days(self):
+        from academic_app.panel import relative
+        cases = {"2026-10-31": "hoy", "2026-11-01": "mañana", "2026-10-30": "ayer", "2026-11-03": "en 3 días",
+                 "2026-10-29": "hace 2 días", None: None, "no es fecha": None}
+        for value, expected in cases.items():
+            self.assertEqual(relative(value, "2026-10-31"), expected, value)
+
+    def test_initials_skip_connectors(self):
+        from academic_app.panel import initials
+        self.assertEqual(initials("Gestión de bases de datos"), "GB")
+        self.assertEqual(initials("Sistemas operativos II"), "SO")
+        self.assertEqual(initials(""), "?")
 
 
 if __name__ == "__main__":

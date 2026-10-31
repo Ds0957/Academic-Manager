@@ -13,16 +13,16 @@ Con el mismo acceso directo **Academic Manager** que el asistente ([38-asistente
 - Si la configuración está **completa**, se abre el panel. Completa quiere decir: los pasos Carpeta de datos, Canvas, Google Drive, Carpeta de Drive y Materias están **Hecho** y la base de datos de este PC coincide con la publicada. Comprobación del equipo y Sincronización diaria no cuentan (solo se conocen al abrirlos).
 - Si no, se abre el asistente como siempre. Su página principal ofrece «Abrir el panel del día a día» en cuanto la configuración queda completa.
 
-Arriba de cada página está el menú **Hoy · Resumen · Materias · Instrucciones · Configuración**; Configuración es el asistente. El aviso de versión nueva («Actualizar ahora») también aparece en el panel.
+Arriba de cada página está la barra con el menú **Hoy · Resumen · Materias · Instrucciones · Configuración** en pestañas; Configuración es el asistente (muestra las pestañas cuando la configuración está completa). Cada materia tiene un color y sus iniciales, iguales en todas las páginas (según su orden en el semestre). Las fechas se muestran también en relativo («mañana», «en 3 días», «hace 2 días»). El aviso de versión nueva («Actualizar ahora») también aparece en el panel.
 
 ## Las páginas
 
 | Página | Qué muestra | De dónde sale |
 |---|---|---|
-| **Hoy** (`/panel`) | Lista de qué hacer primero, en el orden de `today` (lo más urgente arriba), con materia, tipo y fecha; arriba, los avisos del sistema en lenguaje sencillo (sincronización con Canvas que falla o no corre, token de Canvas por vencer, índice desactualizado). | `today` ([34-today.md](34-today.md)) y `summary` ([35-summary.md](35-summary.md)) |
-| **Resumen** (`/panel/resumen`) | Semestre activo, sus materias con la última clase, lo más urgente, notas y tareas recientes y la última sincronización con Canvas. | `summary` |
-| **Materias** (`/panel/materias`) | Las materias del semestre activo. | `summary` |
-| **Materia** (`/panel/materia/MAT-…`) | Pendientes y fechas, entregas y notas, tareas abiertas y el cuadro **Copiar contexto**: el resumen de la materia en texto plano (fechas en hora de Colombia), listo para pegar al empezar el chat de su Project. | `subject-brief` |
+| **Hoy** (`/panel`) | Contadores (atrasado, esta semana, más adelante, sin fecha) y tarjetas agrupadas por fecha (Atrasado, Hoy, Mañana, Esta semana, Más adelante, Sin fecha); dentro de cada grupo se conserva el orden de `today` (lo más urgente arriba). Cada tarjeta lleva la fecha, el tipo con su color, la materia y el motivo; arriba, los avisos del sistema en lenguaje sencillo (sincronización con Canvas que falla o no corre, token de Canvas por vencer, índice desactualizado). | `today` ([34-today.md](34-today.md)) y `summary` ([35-summary.md](35-summary.md)) |
+| **Resumen** (`/panel/resumen`) | Semestre activo con contadores por tipo (vencidas, por entregar, tareas, clases sin procesar); en dos columnas, lo más urgente y, al lado, sus materias con la última clase, notas y tareas recientes y la última sincronización con Canvas. | `summary` |
+| **Materias** (`/panel/materias`) | Las materias del semestre activo en tarjetas, con la última clase y cuántos pendientes y vencidas tiene cada una. | `summary` y `today` (solo para contar; si falla, la página sale sin los conteos) |
+| **Materia** (`/panel/materia/MAT-…`) | Contadores (pendientes, entregas, con nota, tareas abiertas), pendientes y fechas, entregas y notas con su estado, tareas abiertas, decisiones vigentes, resúmenes de clase y el cuadro **Copiar contexto**: el resumen de la materia en texto plano (fechas en hora de Colombia), listo para pegar al empezar el chat de su Project. | `subject-brief` |
 | **Instrucciones** (`/panel/instrucciones`) | Un cuadro por Project (Coordinador y cada materia activa) con sus instrucciones para ChatGPT. | `academic_projects.render_all` ([29-preparacion-chatgpt-projects.md](29-preparacion-chatgpt-projects.md)), en memoria; no escribe archivos |
 
 Una materia que no está en el semestre activo responde «no encontrada». Cada cuadro tiene un botón **Copiar** que lo copia al portapapeles y muestra «Copiado ✓». Si el navegador no deja copiar, el botón lo indica y selecciona el texto para copiarlo con Ctrl+C; sin el script, el botón no aparece y el texto se copia a mano.

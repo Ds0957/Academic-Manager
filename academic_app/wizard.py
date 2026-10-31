@@ -468,8 +468,9 @@ class Wizard:
             rows.append(f'<div class="card step"><div><strong>{number}. {esc(title)}</strong> '
                         f'{badge(state)}<br><span class="muted">{esc(detail)}</span></div>'
                         f'<a href="{esc(link)}">Abrir</a></div>')
+        done = self.complete(steps)
         ready = ('<div class="card msg"><p>La configuración está completa. '
-                 '<a href="/panel">Abrir el panel del día a día</a></p></div>') if self.complete(steps) else ""
+                 '<a href="/panel">Abrir el panel del día a día</a></p></div>') if done else ""
         body = (self._update_card(csrf) + (notice(error, bad=True) if error else "") + ready
                 + '<p>Este asistente prepara Academic Manager en este PC paso a paso. Puede cerrarlo '
                 'cuando quiera: lo que ya hizo queda guardado y al volver verá en qué paso va.</p>'
@@ -477,7 +478,8 @@ class Wizard:
                 + f'<form method="post" action="/cerrar">{csrf_field(csrf)}'
                   '<button class="secondary">Cerrar el asistente</button></form>'
                 + _version_line())
-        return Response(status, layout("Configuración de Academic Manager", body, back=False))
+        return Response(status, layout("Configuración de Academic Manager", body, back=False,
+                                       nav=panel.nav("configuracion") if done else ""))
 
     def close(self, **_):
         body = notice("Asistente cerrado. Puede cerrar esta pestaña.")
@@ -1102,8 +1104,9 @@ class Wizard:
         return self._done("/paso/tarea", "Sincronización diaria activada.")
 
     # --- panel del día a día (solo lectura) -------------------------------------------
-    def _panel(self, key, title, body, csrf, status=200):
-        return Response(status, layout(title, panel.nav(key) + self._update_card(csrf) + body, back=False))
+    def _panel(self, key, title, body, csrf, status=200, **head):
+        return Response(status, layout(title, self._update_card(csrf) + body, back=False, nav=panel.nav(key),
+                                       wide=True, **head))
 
     def _panel_runtime(self):
         try:
@@ -1125,17 +1128,28 @@ class Wizard:
             return self._panel_setup("hoy", "Hoy", csrf)
         today = self._read("panel_today", runtime)
         summary = self._read("panel_summary", runtime)
-        names = panel.names_of(summary.value)
+        names, tones = panel.names_of(summary.value), panel.tones_of(summary.value)
         body = "".join(notice(text) for text in (panel.warnings(summary.value) if summary.value else []))
+        subtitle = ""
         if today.problem:
             body += panel.problem_card(today)
-        elif today.value["items"]:
-            body += ('<p>Lo primero de la lista es lo más urgente. Para marcar algo como hecho, '
-                     'dígaselo al chat de la materia.</p>' + panel.items_table(today.value["items"], names))
         else:
-            days = panel.count(today.value.get("dias", 14), "día", "días")
-            body += notice(f"No hay nada pendiente para los próximos {days}.")
-        return self._panel("hoy", "Hoy", body, csrf)
+            day = today.value["fecha"]
+            subtitle = (panel.day_text(day) or "").capitalize()
+            items = today.value["items"]
+            spread = [panel.bucket(i, day) for i in items]
+            body += panel.stats((spread.count("atrasado"), "Atrasado", "k-bad"),
+                                (sum(b in ("hoy", "manana", "semana") for b in spread), "Esta semana", "k-info"),
+                                (spread.count("despues"), "Más adelante", "k-task"),
+                                (spread.count("sin"), "Sin fecha", "k-todo"))
+            if items:
+                body += ('<p class="muted">Agrupado por fecha; dentro de cada grupo, primero lo más urgente. '
+                         'Para marcar algo como hecho, dígaselo al chat de la materia.</p>'
+                         + panel.items_list(items, names, tones, day, grouped=True))
+            else:
+                days = panel.count(today.value.get("dias", 14), "día", "días")
+                body += panel.empty("Todo al día", f"No hay nada pendiente para los próximos {days}.")
+        return self._panel("hoy", "Hoy", body, csrf, subtitle=subtitle)
 
     def panel_summary(self, csrf, **_):
         runtime = self._panel_runtime()
@@ -1145,31 +1159,49 @@ class Wizard:
         if summary.problem:
             return self._panel("resumen", "Resumen", panel.problem_card(summary), csrf)
         data = summary.value
-        names = panel.names_of(data)
+        day = data["fecha"]
+        names, tones = panel.names_of(data), panel.tones_of(data)
         term = data["semestre"]
-        block = f", bloque {term['bloque_activo']}" if term.get("bloque_activo") else ""
+        block = f" · bloque {term['bloque_activo']}" if term.get("bloque_activo") else ""
+        kinds = data["urgente"].get("resumen") or {}
+        hero = (f'<section class="card hero"><div><p class="eyebrow">Semestre activo</p>'
+                f'<h2>{esc(term.get("nombre") or term["semestre_id"])}</h2>'
+                f'<p class="muted">{esc(term["semestre_id"])}{esc(block)} · '
+                f'{esc(panel.count(len(data["materias"]), "materia", "materias"))}</p></div>'
+                + panel.stats((kinds.get("actividad_vencida", 0), "Vencidas", "k-bad"),
+                              (kinds.get("actividad_proxima", 0), "Por entregar", "k-info"),
+                              (kinds.get("tarea", 0) + kinds.get("tarea_sin_fecha", 0), "Tareas", "k-task"),
+                              (kinds.get("clase_sin_procesar", 0), "Clases sin procesar", "k-todo"))
+                + "</section>")
+        urgent = data["urgente"]["items"]
+        main = ('<h2>Lo más urgente</h2>'
+                + (panel.items_list(urgent, names, tones, day) if urgent
+                   else panel.empty("Nada urgente", "No hay entregas ni tareas que apremien."))
+                + '<a class="more" href="/panel">Ver todo en «Hoy» →</a>')
         subjects = "".join(
-            f'<li><a href="/panel/materia/{esc(m["materia_id"])}">{esc(names[m["materia_id"]])}</a>'
-            f' <span class="muted">· última clase: {esc(panel.day_text(m.get("ultima_clase")) or "sin clases")}'
-            '</span></li>' for m in data["materias"])
-        notes = "".join(f'<li>{esc(panel.day_text(n.get("fecha")) or "")} · '
-                        f'{esc(names.get(n["materia_id"], n["materia_id"]))}: {esc(n["texto"])}</li>'
+            f'<li>{panel.avatar(names[m["materia_id"]], tones[m["materia_id"]])}<div class="grow">'
+            f'<a href="/panel/materia/{esc(m["materia_id"])}">{esc(names[m["materia_id"]])}</a>'
+            f'<small>Última clase: {esc(_last_class(m.get("ultima_clase"), day))}</small></div></li>'
+            for m in data["materias"])
+        notes = "".join(f'<li class="{esc(tones.get(n["materia_id"], ""))}">{esc(n["texto"])}'
+                        f'<small>{esc(names.get(n["materia_id"], n["materia_id"]))} · '
+                        f'{esc(panel.day_text(n.get("fecha")) or "sin fecha")}</small></li>'
                         for n in data["reciente"]["notas"])
-        tasks = "".join(f'<li>{esc(t["titulo"])} <span class="muted">· '
+        tasks = "".join(f'<li><div class="grow">{esc(t["titulo"])}<small>'
                         + esc(f"fecha límite {panel.day_text(t['fecha_limite'])}" if t.get("fecha_limite")
-                              else "sin fecha límite") + "</span></li>"
+                              else "sin fecha límite") + "</small></div></li>"
                         for t in data["reciente"]["tareas"])
-        body = (f'<p>Hoy es {esc(panel.day_text(data["fecha"]))}.</p>'
-                + "".join(notice(text) for text in panel.warnings(data))
-                + f'<div class="card"><h2>Semestre {esc(term.get("nombre") or term["semestre_id"])}</h2>'
-                f'<p>{esc(term["semestre_id"])}{esc(block)} · '
-                f'{esc(panel.count(len(data["materias"]), "materia", "materias"))}</p><ul>{subjects}</ul></div>'
-                + '<h2>Lo más urgente</h2>'
-                + (panel.items_table(data["urgente"]["items"], names) or "<p>No hay nada urgente.</p>")
-                + (f"<h2>Notas recientes</h2><ul>{notes}</ul>" if notes else "")
-                + (f"<h2>Tareas abiertas</h2><ul>{tasks}</ul>" if tasks else "")
-                + f'<h2>Sincronización con Canvas</h2><p>{esc(_sync_text(data["sistema"]))}</p>')
-        return self._panel("resumen", "Resumen", body, csrf)
+        last = (data.get("sistema") or {}).get("ultimo_canvas_sync") or {}
+        sync_state = {"ok": " ok", "error": " bad"}.get(last.get("status"), "")
+        side = (f'<div class="card"><h2>Sus materias</h2><ul class="rows">{subjects}</ul></div>'
+                + (f'<div class="card"><h2>Notas recientes</h2><ul class="timeline">{notes}</ul></div>'
+                   if notes else "")
+                + (f'<div class="card"><h2>Tareas abiertas</h2><ul class="rows">{tasks}</ul></div>' if tasks else "")
+                + f'<div class="card"><h2>Sincronización con Canvas</h2><div class="sync{sync_state}">'
+                  f'<span class="dot"></span><p>{esc(_sync_text(data["sistema"]))}</p></div></div>')
+        body = ("".join(notice(text) for text in panel.warnings(data)) + hero
+                + f'<div class="grid"><div>{main}</div><aside>{side}</aside></div>')
+        return self._panel("resumen", "Resumen", body, csrf, subtitle=f"Hoy es {panel.day_text(day)}.")
 
     def panel_subjects(self, csrf, **_):
         runtime = self._panel_runtime()
@@ -1178,15 +1210,28 @@ class Wizard:
         summary = self._read("panel_summary", runtime)
         if summary.problem:
             return self._panel("materias", "Materias", panel.problem_card(summary), csrf)
-        names = panel.names_of(summary.value)
-        rows = "".join(
-            f'<div class="card step"><div><strong>{esc(names[m["materia_id"]])}</strong><br>'
-            f'<span class="muted">Última clase: {esc(panel.day_text(m.get("ultima_clase")) or "sin clases")}'
-            f'</span></div><a href="/panel/materia/{esc(m["materia_id"])}">Abrir</a></div>'
-            for m in summary.value["materias"])
-        count = panel.count(len(summary.value["materias"]), "materia", "materias")
-        body = f"<p>{esc(count)} en el semestre {esc(summary.value['semestre']['semestre_id'])}.</p>" + rows
-        return self._panel("materias", "Materias", body, csrf)
+        data = summary.value
+        names, tones = panel.names_of(data), panel.tones_of(data)
+        today = self._read("panel_today", runtime)  # solo para contar pendientes; si falla, no se cuentan
+        items = today.value["items"] if today.value else None
+        cards = []
+        for m in data["materias"]:
+            mid = m["materia_id"]
+            chips = ""
+            if items is not None:
+                mine = [i for i in items if i.get("materia_id") == mid and i["tipo"] != "materia_descuidada"]
+                late = sum(i["tipo"] == "actividad_vencida" for i in mine)
+                chips = (panel.chip(panel.count(late, "vencida", "vencidas"), "k-bad") if late else "") + (
+                    panel.chip(panel.count(len(mine), "pendiente", "pendientes"), "k-info") if mine
+                    else panel.chip("Nada pendiente", "k-ok"))
+            cards.append(f'<a class="card subject-card {esc(tones[mid])}" href="/panel/materia/{esc(mid)}">'
+                         f'<div class="head">{panel.avatar(names[mid], tones[mid])}<div><h3>{esc(names[mid])}</h3>'
+                         f'<span class="muted">{esc(mid)}</span></div></div>'
+                         f'<span class="muted">Última clase: {esc(_last_class(m.get("ultima_clase"), data["fecha"]))}'
+                         f'</span><div class="foot">{chips}</div></a>')
+        count = panel.count(len(data["materias"]), "materia", "materias")
+        return self._panel("materias", "Materias", f'<div class="cards">{"".join(cards)}</div>', csrf,
+                           subtitle=f"{count} en el semestre {data['semestre']['semestre_id']}.")
 
     def panel_subject(self, csrf, subject, **_):
         runtime = self._panel_runtime()
@@ -1195,7 +1240,7 @@ class Wizard:
         summary = self._read("panel_summary", runtime)
         if summary.problem:
             return self._panel("materias", "Materia", panel.problem_card(summary), csrf)
-        names = panel.names_of(summary.value)
+        names, tones = panel.names_of(summary.value), panel.tones_of(summary.value)
         if subject not in names:  # solo materias del semestre activo; nada de la ruta llega a la página
             body = notice("Esa materia no está en el semestre activo.", bad=True) + \
                 '<p><a href="/panel/materias">Ver sus materias</a></p>'
@@ -1205,25 +1250,50 @@ class Wizard:
         if brief.problem:
             return self._panel("materias", title, panel.problem_card(brief), csrf)
         data = brief.value
-        grades = "".join(f'<tr><td>{esc(r.get("titulo") or r["actividad_id"])}</td>'
-                         f'<td>{esc(panel.grade_text(r))}</td><td>{esc(r.get("comentario") or "")}</td></tr>'
-                         for r in data["entregas"])
-        tasks = "".join(f'<li>{esc(t["titulo"])} <span class="muted">· '
-                        + esc(f"fecha límite {panel.day_text(t['fecha_limite'])}" if t.get("fecha_limite")
-                              else "sin fecha límite") + "</span></li>" for t in data["tareas"])
+        day = data["fecha"]
         pending = data["pendientes"]["items"]
-        body = (f'<p class="muted">Semestre {esc(data["materia"].get("semestre_id") or "")} · última clase: '
-                f'{esc(panel.day_text(data["materia"].get("ultima_clase")) or "sin clases")}</p>'
-                + "<h2>Pendientes y fechas</h2>"
-                + (panel.items_table(pending, names) if pending else "<p>No hay nada pendiente.</p>")
-                + ('<h2>Entregas y notas</h2><table class="panel-table"><thead><tr><th>Actividad</th>'
-                   f'<th>Estado</th><th>Comentario</th></tr></thead><tbody>{grades}</tbody></table>'
-                   if grades else "")
-                + (f"<h2>Tareas abiertas</h2><ul>{tasks}</ul>" if tasks else "")
-                + '<h2>Copiar contexto</h2><p>Copie este texto y péguelo al empezar el chat del Project de '
-                  'esta materia en ChatGPT.</p>'
-                + panel.copy_box(f"contexto-{subject}", "Contexto de la materia", panel.brief_text(data)))
-        return self._panel("materias", title, body, csrf)
+        graded = [r for r in data["entregas"] if r.get("nota") not in (None, "")]
+        state_kind = {"pendiente": "k-todo", "en_progreso": "k-info", "entregada": "k-task", "calificada": "k-ok"}
+        grades = "".join(
+            f'<li><div class="grow">{esc(r.get("titulo") or r["actividad_id"])}'
+            + (f'<small>{esc(r["comentario"])}</small>' if r.get("comentario") else "")
+            + "</div>" + panel.chip(panel.TRACK.get(r.get("estado"), r.get("estado") or "sin estado"),
+                                    state_kind.get(r.get("estado"), ""))
+            + (f' {panel.chip(_grade_label(r))}' if _grade_label(r) else "") + "</li>"
+            for r in data["entregas"])
+        tasks = "".join(f'<li><div class="grow">{esc(t["titulo"])}<small>'
+                        + esc(f"fecha límite {panel.day_text(t['fecha_limite'])}" if t.get("fecha_limite")
+                              else "sin fecha límite") + "</small></div>"
+                        + panel.chip(panel.TASK.get(t["estado"], t["estado"]), "k-task") + "</li>"
+                        for t in data["tareas"])
+        tone = tones[subject]
+
+        def timeline(rows):
+            return "".join(f'<li class="{esc(tone)}">{esc(r["texto"])}<small>'
+                           f'{esc(panel.utc_day_text(r.get("creado_utc")) or "sin fecha")}</small></li>' for r in rows)
+        decisions, classes = timeline(data["decisiones"]), timeline(data["resumenes_clase"])
+        main = ("<h2>Pendientes y fechas</h2>"
+                + (panel.items_list(pending, names, tones, day) if pending
+                   else panel.empty("Nada pendiente", "Esta materia está al día."))
+                + (f'<div class="card"><h2>Entregas y notas</h2><ul class="rows">{grades}</ul></div>' if grades else "")
+                + '<div class="card"><h2>Copiar contexto</h2><p>Copie este texto y péguelo al empezar el chat del '
+                  'Project de esta materia en ChatGPT.</p>'
+                + panel.copy_box(f"contexto-{subject}", "Contexto de la materia", panel.brief_text(data)) + "</div>")
+        side = ((f'<div class="card"><h2>Tareas abiertas</h2><ul class="rows">{tasks}</ul></div>' if tasks else "")
+                + (f'<div class="card"><h2>Decisiones vigentes</h2><ul class="timeline">{decisions}</ul></div>'
+                   if decisions else "")
+                + (f'<div class="card"><h2>Resúmenes de clase</h2><ul class="timeline">{classes}</ul></div>'
+                   if classes else ""))
+        body = (panel.stats((len(pending), "Pendientes", "k-bad" if any(
+                                i["tipo"] == "actividad_vencida" for i in pending) else "k-info"),
+                            (len(data["entregas"]), "Entregas", "k-task"),
+                            (len(graded), "Con nota", ""),
+                            (len(data["tareas"]), "Tareas abiertas", "k-todo"))
+                + f'<div class="grid"><div>{main}</div><aside>{side}</aside></div>')
+        subtitle = (f'{subject} · Semestre {data["materia"].get("semestre_id") or ""} · última clase: '
+                    f'{panel.day_text(data["materia"].get("ultima_clase")) or "sin clases"}')
+        return self._panel("materias", title, body, csrf, subtitle=subtitle,
+                           icon=panel.avatar(title, tone, big=True))
 
     def panel_instructions(self, csrf, **_):
         title = "Instrucciones de los Projects"
@@ -1233,19 +1303,41 @@ class Wizard:
         files = self._read("panel_instructions", runtime)
         if files.problem:
             return self._panel("instrucciones", title, panel.problem_card(files, csrf), csrf)
-        names = panel.names_of(self._read("panel_summary", runtime).value)
+        summary = self._read("panel_summary", runtime).value
+        names, tones = panel.names_of(summary), panel.tones_of(summary)
         boxes = []
         for name in sorted(files.value, key=lambda n: (n != "coordinador.md", n)):
             if name == "coordinador.md":
-                ident, label = "coordinador", "Coordinador"
+                ident, label, tone, note = "coordinador", "Coordinador", "", "Project general"
             else:
                 ident = name.removeprefix("materia-").removesuffix(".md")
-                label = f"{names.get(ident, ident)} ({ident})"
-            boxes.append(f"<h2>{esc(label)}</h2>"
-                         + panel.copy_box(f"instrucciones-{ident}", "Copiar instrucciones", files.value[name]))
-        body = ("<p>Cada cuadro tiene las instrucciones de un Project de ChatGPT. Cópielas en el campo "
-                "«Instrucciones» del Project con el mismo nombre.</p>" + "".join(boxes))
-        return self._panel("instrucciones", title, body, csrf)
+                label, tone, note = names.get(ident, ident), tones.get(ident, ""), ident
+            boxes.append(f'<div class="card"><div class="page-head">{panel.avatar(label, tone)}'
+                         f'<div><h2 style="margin:0">{esc(label)}</h2><span class="muted">{esc(note)}</span></div></div>'
+                         + panel.copy_box(f"instrucciones-{ident}", "Copiar instrucciones", files.value[name])
+                         + "</div>")
+        body = f'<div class="cards wide-cards">{"".join(boxes)}</div>'
+        return self._panel("instrucciones", title, body, csrf,
+                           subtitle="Cada cuadro tiene las instrucciones de un Project de ChatGPT. Cópielas en el "
+                                    "campo «Instrucciones» del Project con el mismo nombre.")
+
+
+def _last_class(value, today):
+    """'hace 3 días (miércoles 28 de octubre de 2026)' o 'sin clases'."""
+    text = panel.day_text(value)
+    if not text:
+        return "sin clases"
+    rel = panel.relative(value, today)
+    return f"{rel} ({text})" if rel else text
+
+
+def _grade_label(row):
+    parts = []
+    if row.get("nota") not in (None, ""):
+        parts.append(f"nota {panel.number_text(row['nota'])}")
+    if row.get("puntos") not in (None, ""):
+        parts.append(f"{panel.number_text(row['puntos'])} puntos")
+    return " · ".join(parts)
 
 
 def _sync_text(system):

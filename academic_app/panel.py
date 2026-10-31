@@ -105,7 +105,7 @@ def utc_day_text(stamp):
     return day_text(moment.astimezone(LOCAL_ZONE).date().isoformat())
 
 
-def _number(value):
+def number_text(value):
     if isinstance(value, float) and value.is_integer():
         return str(int(value))
     return str(value)
@@ -114,9 +114,9 @@ def _number(value):
 def grade_text(row):
     parts = [TRACK.get(row.get("estado"), row.get("estado") or "sin estado")]
     if row.get("nota") not in (None, ""):
-        parts.append(f"nota {_number(row['nota'])}")
+        parts.append(f"nota {number_text(row['nota'])}")
     if row.get("puntos") not in (None, ""):
-        parts.append(f"{_number(row['puntos'])} puntos")
+        parts.append(f"{number_text(row['puntos'])} puntos")
     return ", ".join(parts)
 
 
@@ -206,7 +206,7 @@ def nav(current):
     for key, title, href in NAV:
         mark = ' aria-current="page"' if key == current else ""
         links.append(f'<a href="{esc(href)}"{mark}>{esc(title)}</a>')
-    return '<nav class="panel-nav">' + " · ".join(links) + "</nav>"
+    return '<nav class="panel-nav">' + "".join(links) + "</nav>"
 
 
 def problem_card(reading, csrf=None):
@@ -224,21 +224,126 @@ def names_of(summary):
     return {m["materia_id"]: m.get("nombre") or m["materia_id"] for m in (summary or {}).get("materias", [])}
 
 
-def items_table(items, names):
+# --- piezas visuales -------------------------------------------------------------------
+TONES = 8
+KIND = {"actividad_vencida": "k-bad", "actividad_proxima": "k-info", "tarea": "k-task",
+        "tarea_sin_fecha": "k-task", "clase_sin_procesar": "k-todo", "materia_descuidada": ""}
+GROUPS = (("atrasado", "Atrasado"), ("hoy", "Hoy"), ("manana", "Mañana"), ("semana", "Esta semana"),
+          ("despues", "Más adelante"), ("sin", "Sin fecha"))
+SMALL_WORDS = {"de", "del", "la", "las", "el", "los", "y", "e", "en", "a", "para", "con"}
+
+
+def tones_of(summary):
+    """Un color por materia, según su orden en el semestre (estable entre páginas)."""
+    return {m["materia_id"]: f"t{n % TONES}" for n, m in enumerate((summary or {}).get("materias", []))}
+
+
+def _date(value):
+    try:
+        return date.fromisoformat(str(value)[:10]) if value else None
+    except ValueError:
+        return None
+
+
+def days_until(value, today):
+    day, base = _date(value), _date(today)
+    return (day - base).days if day and base else None
+
+
+def relative(value, today):
+    """'hoy', 'mañana', 'ayer', 'en 3 días', 'hace 2 días'; sin fecha → None."""
+    n = days_until(value, today)
+    if n is None:
+        return None
+    if n in (-1, 0, 1):
+        return {-1: "ayer", 0: "hoy", 1: "mañana"}[n]
+    return f"en {count(n, 'día', 'días')}" if n > 0 else f"hace {count(-n, 'día', 'días')}"
+
+
+def initials(name):
+    words = [w for w in str(name or "?").replace("-", " ").split() if w.lower() not in SMALL_WORDS]
+    letters = "".join(w[0] for w in words if w[0].isalpha())[:2]
+    return (letters or str(name or "?")[:2]).upper()
+
+
+def avatar(name, tone, big=False):
+    return f'<span class="avatar {esc(tone)}{" big" if big else ""}" aria-hidden="true">{esc(initials(name))}</span>'
+
+
+def subject_link(subject, names, tones):
+    """Nombre de la materia con su punto de color; enlace solo si es del semestre activo."""
+    label = names.get(subject) or subject or "Sin materia"
+    inner = f'<span class="dot"></span>{esc(label)}'
+    if subject in names:
+        return f'<a class="subject {esc(tones.get(subject, ""))}" href="/panel/materia/{esc(subject)}">{inner}</a>'
+    return f'<span class="subject">{inner}</span>'
+
+
+def date_chip(value):
+    day = _date(value)
+    if day is None:
+        return '<div class="when none" aria-hidden="true"><span class="w">&nbsp;</span><span class="d">—</span>' \
+               '<span class="m">sin fecha</span></div>'
+    return (f'<div class="when" aria-hidden="true"><span class="w">{DAYS[day.weekday()][:3]}</span>'
+            f'<span class="d">{day.day}</span><span class="m">{MONTHS[day.month - 1][:3]}</span></div>')
+
+
+def chip(text, kind=""):
+    return f'<span class="chip {esc(kind)}">{esc(text)}</span>'
+
+
+def item_card(item, names, tones, today):
+    subject = item.get("materia_id")
+    kind = KIND.get(item["tipo"], "")
+    show_subject = item["tipo"] != "materia_descuidada" or subject not in names
+    rel = relative(item.get("fecha"), today)
+    left = days_until(item.get("fecha"), today)
+    rel_class = "k-bad" if left is not None and left < 0 and kind == "k-bad" else (
+        "soon" if left is not None and 0 <= left <= 2 else "")
+    meta = " · ".join(t for t in (day_text(item.get("fecha")) or "Sin fecha", item.get("motivo")) if t)
+    return (f'<article class="item {esc(tones.get(subject, ""))}">{date_chip(item.get("fecha"))}'
+            f'<div class="item-main"><div class="item-top">{chip(TYPES.get(item["tipo"], "Pendiente"), kind)}'
+            + (subject_link(subject, names, tones) if show_subject else "")
+            + f'</div><h3 class="item-title">{esc(item.get("titulo") or "Sin título")}</h3>'
+            f'<p class="item-meta">{esc(meta)}</p></div>'
+            + (f'<div class="rel {rel_class}">{esc(rel)}</div>' if rel else "") + "</article>")
+
+
+def bucket(item, today):
+    n = days_until(item.get("fecha"), today)
+    if n is None:
+        return "sin"
+    if n < 0:
+        return "atrasado"
+    return "hoy" if n == 0 else "manana" if n == 1 else "semana" if n <= 7 else "despues"
+
+
+def items_list(items, names, tones, today, grouped=False):
+    """Pendientes como tarjetas; agrupados por fecha conservan el orden de urgencia dentro del grupo."""
     if not items:
         return ""
-    rows = []
-    for item in items:
-        subject = item.get("materia_id")
-        label = names.get(subject) or subject or "Sin materia"
-        cell = (f'<a href="/panel/materia/{esc(subject)}">{esc(label)}</a>' if subject in names
-                else esc(label))
-        rows.append(f"<tr><td><strong>{esc(item.get('titulo') or 'Sin título')}</strong><br>"
-                    f'<span class="muted">{esc(TYPES.get(item["tipo"], "Pendiente"))}</span></td>'
-                    f"<td>{cell}</td><td>{esc(day_text(item.get('fecha')) or 'Sin fecha')}<br>"
-                    f'<span class="muted">{esc(item.get("motivo") or "")}</span></td></tr>')
-    return ('<table class="panel-table"><thead><tr><th>Qué</th><th>Materia</th><th>Cuándo</th></tr></thead>'
-            "<tbody>" + "".join(rows) + "</tbody></table>")
+    if not grouped:
+        return '<div class="items">' + "".join(item_card(i, names, tones, today) for i in items) + "</div>"
+    html = []
+    for key, title in GROUPS:
+        group = [i for i in items if bucket(i, today) == key]
+        if group:
+            mark = " k-bad" if key == "atrasado" else ""
+            html.append(f'<h2 class="group-title{mark}">{esc(title)} <span class="count">{len(group)}</span></h2>'
+                        + items_list(group, names, tones, today))
+    return "".join(html)
+
+
+def stat(number, label, kind=""):
+    return f'<div class="stat {esc(kind)}"><span class="num">{number}</span><span class="lbl">{esc(label)}</span></div>'
+
+
+def stats(*tiles):
+    return '<div class="stats">' + "".join(stat(*t) for t in tiles) + "</div>"
+
+
+def empty(title, text=""):
+    return f'<div class="card empty"><strong>{esc(title)}</strong>{esc(text)}</div>'
 
 
 def copy_box(ident, label, text):
