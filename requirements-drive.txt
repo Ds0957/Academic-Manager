@@ -1,0 +1,4 @@
+# Lightweight authorization/Drive access, independently of WhisperX.
+google-api-python-client>=2.160,<3
+google-auth>=2.38,<3
+google-auth-oauthlib>=1.2,<2

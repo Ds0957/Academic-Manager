@@ -1,0 +1,83 @@
+# Instalador de Windows (docs/39-instalador-windows.md).
+# - A mano (workflow_dispatch): construye AcademicManager-Setup-<versión>.exe y lo deja como artefacto.
+# - Al empujar una etiqueta v* (por ejemplo v0.1.0, igual a academic_app/VERSION): además lo adjunta
+#   a la release de esa etiqueta; si no existe, la crea como borrador (publicarla es decisión humana).
+#   Una release ya publicada nunca se modifica: el job falla con un mensaje claro.
+# Acciones fijadas por SHA completo (etiqueta indicada al lado). Sin secretos: solo el GITHUB_TOKEN.
+name: build-installer
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-installer-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Tag matches academic_app/VERSION
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $version = (Get-Content -LiteralPath academic_app/VERSION -Raw).Trim()
+          if ("v$version" -ne $env:GITHUB_REF_NAME) {
+            throw "La etiqueta $env:GITHUB_REF_NAME no coincide con academic_app/VERSION (v$version)."
+          }
+
+      - name: Build installer (pinned Python, pip and Inno Setup, SHA-256 verified)
+        shell: pwsh
+        run: ./installer/build.ps1 -BuildDir "$env:RUNNER_TEMP\am-build" -InstallInnoSetup
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: AcademicManager-Setup
+          path: ${{ runner.temp }}/am-build/out/AcademicManager-Setup-*.exe
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    # Solo al empujar una etiqueta v*; una ejecución manual nunca toca releases.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: AcademicManager-Setup
+          path: dist
+
+      - name: Attach to the release of this tag (draft if it does not exist)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # La lista incluye borradores (la consulta por etiqueta no los ve).
+          draft="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName,isDraft \
+            --jq '.[] | select(.tagName == $ENV.TAG) | .isDraft')"
+          if [ -z "$draft" ]; then
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
+              --title "Academic Manager $TAG" --notes "Instalador de Windows: descargue AcademicManager-Setup y ábralo (docs/39-instalador-windows.md)."
+            draft=true
+          fi
+          if [ "$draft" != "true" ]; then
+            echo "::error::La release $TAG ya está publicada: no se reemplaza su instalador. Publique una versión nueva (otra etiqueta)."
+            exit 1
+          fi
+          # Solo un borrador: reemplazar el .exe de una ejecución anterior.
+          gh release upload "$TAG" dist/AcademicManager-Setup-*.exe --repo "$GITHUB_REPOSITORY" --clobber

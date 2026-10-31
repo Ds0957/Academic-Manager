@@ -1,0 +1,2 @@
+# PDF text layer extraction; Canvas HTTP client uses Python stdlib.
+pypdf==5.9.0

@@ -1,0 +1,7 @@
+# Install in a dedicated Python 3.11/3.12 environment; CUDA wheels depend on the PC.
+# Exact environment freeze is intentionally pending the first real GPU validation.
+whisperx>=3.8,<4
+# YouTube source: exact yt-dlp release; [pin] fixes its own dependencies (yt-dlp-ejs included)
+# and [pin-deno] installs the JavaScript runtime YouTube needs. Update procedure: docs/05-capture.md.
+yt-dlp[pin,pin-deno]==2026.10.21
+-r requirements-drive.txt

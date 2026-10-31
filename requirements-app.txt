@@ -1,0 +1,12 @@
+# Runtime of the installed app (Windows installer, docs/39): wizard, Canvas Sync, Drive and
+# Capture without WhisperX. Exact versions; WhisperX is installed later by the wizard only when
+# `python -m academic_setup check` says the PC is apt (academic_setup/whisperx.py).
+# Same pins as requirements-canvas.txt (pypdf) and requirements-capture.txt (yt-dlp); Google
+# libraries are exact releases inside the ranges of requirements-drive.txt.
+pypdf==5.9.0
+yt-dlp[pin,pin-deno]==2026.10.21
+google-api-python-client==2.201.0
+google-auth==2.62.0
+google-auth-oauthlib==1.5.0
+# Windows has no IANA time zone database: zoneinfo needs it for America/Bogota (today, canvas_sync).
+tzdata==2026.5
