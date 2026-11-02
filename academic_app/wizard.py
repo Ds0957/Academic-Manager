@@ -42,6 +42,7 @@ STEPS = (("datos", "Carpeta de datos", "/paso/datos"),
 # Configuración completa para abrir el panel (equipo y tarea solo se conocen al abrirlos).
 COMPLETE_STEPS = ("datos", "canvas", "google", "drive", "materias")
 SUBJECT_PAGE = "/panel/materia/"
+CANVAS_INBOX = "https://areandina.instructure.com/conversations"  # bandeja: abrirla no marca mensajes como leídos
 PUBLISHING_PAGE = "/panel/publicando/"
 RELOGIN_HINT_DAYS = 6
 NEED_DATA = "Primero elija la carpeta de datos (paso 1)."
@@ -116,13 +117,16 @@ def _defaults():
     from canvas_sync import semester, workbook_enrollment
     from capture.sources import auth as drive_auth
     from . import updates
-    from academic_access import brief, summary, today
+    from academic_access import brief, canvas, summary, today
     from academic_projects.__main__ import render_all
     from canvas_sync.routine import workbook_version
     from academic_operations import chat
+    from . import manual_sync
     return {"write_preview": chat.preview, "write_apply": chat.apply,
+            "sync_start": manual_sync.start, "sync_status": manual_sync.status,
             "panel_today": today.today, "panel_summary": summary.summary,
             "panel_brief": brief.subject_brief, "panel_instructions": render_all,
+            "panel_canvas": canvas.canvas_extras,
             "workbook_version": workbook_version,
             "check_update": updates.check, "download_update": updates.download,
             "launch_update": updates.launch,
@@ -396,6 +400,8 @@ class Wizard:
                   ("GET", "/panel"): self.panel_today, ("GET", "/panel/resumen"): self.panel_summary,
                   ("GET", "/panel/materias"): self.panel_subjects,
                   ("GET", "/panel/instrucciones"): self.panel_instructions,
+                  ("POST", "/panel/sincronizar"): self.sync_now,
+                  ("GET", "/panel/sincronizar"): self.sync_page,
                   ("POST", "/panel/registrar"): self.register_preview,
                   ("POST", "/panel/registrar/aprobar"): self.register_approve,
                   ("POST", "/actualizar"): self.update_now,
@@ -1131,6 +1137,22 @@ class Wizard:
     def _read(self, dep, *args):
         return panel.read(self.deps[dep], *args)
 
+    def _canvas(self, runtime):
+        """Datos de Canvas (notas, comentarios, mensajes sin leer); si fallan, la página sigue sin ellos."""
+        return self._read("panel_canvas", runtime).value or {}
+
+    @staticmethod
+    def _new_grades(extras, names, tones):
+        rows = "".join(
+            f'<li><div class="grow">{esc(r["titulo"])}<small>{panel.subject_link(r["materia_id"], names, tones)}'
+            f' · {esc(panel.day_text(r["fecha"]) or "sin fecha")}</small></div>'
+            f'{panel.chip(panel.score_text(r["nota"], r.get("de")), "k-ok")}</li>'
+            for r in extras.get("notas_nuevas") or [])
+        if not rows:
+            return ""
+        return ('<div class="card"><h2>Notas nuevas en Canvas</h2><p class="muted">Calificadas en los últimos '
+                f'{canvas_days()} días, según la última sincronización.</p><ul class="rows">{rows}</ul></div>')
+
     def panel_today(self, csrf, **_):
         runtime = self._panel_runtime()
         if runtime is None:
@@ -1139,6 +1161,8 @@ class Wizard:
         summary = self._read("panel_summary", runtime)
         names, tones = panel.names_of(summary.value), panel.tones_of(summary.value)
         body = "".join(notice(text) for text in (panel.warnings(summary.value) if summary.value else []))
+        if summary.value:
+            body += self._sync_card(runtime, csrf, summary.value.get("sistema"), compact=True)
         subtitle = ""
         if today.problem:
             body += panel.problem_card(today)
@@ -1151,6 +1175,8 @@ class Wizard:
                                 (sum(b in ("hoy", "manana", "semana") for b in spread), "Esta semana", "k-info"),
                                 (spread.count("despues"), "Más adelante", "k-task"),
                                 (spread.count("sin"), "Sin fecha", "k-todo"))
+            if names:
+                body += self._new_grades(self._canvas(runtime), names, tones)
             if items:
                 body += ('<p class="muted">Agrupado por fecha; dentro de cada grupo, primero lo más urgente. '
                          'Para marcar algo como hecho, use los botones de cada tarjeta: antes de guardar verá una vista '
@@ -1189,10 +1215,12 @@ class Wizard:
                 + (panel.items_list(urgent, names, tones, day) if urgent
                    else panel.empty("Nada urgente", "No hay entregas ni tareas que apremien."))
                 + '<a class="more" href="/panel">Ver todo en «Hoy» →</a>')
+        extras = self._canvas(runtime)
         subjects = "".join(
             f'<li>{panel.avatar(names[m["materia_id"]], tones[m["materia_id"]])}<div class="grow">'
             f'<a href="/panel/materia/{esc(m["materia_id"])}">{esc(names[m["materia_id"]])}</a>'
-            f'<small>Última clase: {esc(_last_class(m.get("ultima_clase"), day))}</small></div></li>'
+            f'<small>Última clase: {esc(_last_class(m.get("ultima_clase"), day))}</small></div>'
+            f'{panel.canvas_chips(panel.canvas_subject(extras, m["materia_id"]))}</li>'
             for m in data["materias"])
         notes = "".join(f'<li class="{esc(tones.get(n["materia_id"], ""))}">{esc(n["texto"])}'
                         f'<small>{esc(names.get(n["materia_id"], n["materia_id"]))} · '
@@ -1202,14 +1230,11 @@ class Wizard:
                         + esc(f"fecha límite {panel.day_text(t['fecha_limite'])}" if t.get("fecha_limite")
                               else "sin fecha límite") + "</small></div></li>"
                         for t in data["reciente"]["tareas"])
-        last = (data.get("sistema") or {}).get("ultimo_canvas_sync") or {}
-        sync_state = {"ok": " ok", "error": " bad"}.get(last.get("status"), "")
         side = (f'<div class="card"><h2>Sus materias</h2><ul class="rows">{subjects}</ul></div>'
                 + (f'<div class="card"><h2>Notas recientes</h2><ul class="timeline">{notes}</ul></div>'
                    if notes else "")
                 + (f'<div class="card"><h2>Tareas abiertas</h2><ul class="rows">{tasks}</ul></div>' if tasks else "")
-                + f'<div class="card"><h2>Sincronización con Canvas</h2><div class="sync{sync_state}">'
-                  f'<span class="dot"></span><p>{esc(_sync_text(data["sistema"]))}</p></div></div>')
+                + self._sync_card(runtime, csrf, data["sistema"]))
         body = ("".join(notice(text) for text in panel.warnings(data)) + hero
                 + f'<div class="grid"><div>{main}</div><aside>{side}</aside></div>')
         return self._panel("resumen", "Resumen", body, csrf, subtitle=f"Hoy es {panel.day_text(day)}.")
@@ -1225,6 +1250,7 @@ class Wizard:
         names, tones = panel.names_of(data), panel.tones_of(data)
         today = self._read("panel_today", runtime)  # solo para contar pendientes; si falla, no se cuentan
         items = today.value["items"] if today.value else None
+        extras = self._canvas(runtime)
         cards = []
         for m in data["materias"]:
             mid = m["materia_id"]
@@ -1235,6 +1261,7 @@ class Wizard:
                 chips = (panel.chip(panel.count(late, "vencida", "vencidas"), "k-bad") if late else "") + (
                     panel.chip(panel.count(len(mine), "pendiente", "pendientes"), "k-info") if mine
                     else panel.chip("Nada pendiente", "k-ok"))
+            chips += panel.canvas_chips(panel.canvas_subject(extras, mid))
             cards.append(f'<a class="card subject-card {esc(tones[mid])}" href="/panel/materia/{esc(mid)}">'
                          f'<div class="head">{panel.avatar(names[mid], tones[mid])}<div><h3>{esc(names[mid])}</h3>'
                          f'<span class="muted">{esc(mid)}</span></div></div>'
@@ -1283,6 +1310,12 @@ class Wizard:
                         + panel.chip(panel.TASK.get(t["estado"], t["estado"]), "k-task") + "</li>"
                         for t in data["tareas"])
         tone = tones[subject]
+        canvas = panel.canvas_subject(self._canvas(runtime), subject)
+        feedback = canvas.get("retroalimentacion") or []
+        unread = canvas.get("sin_leer")
+        inbox = (notice(f'Tiene {panel.count(unread, "mensaje sin leer", "mensajes sin leer")} de esta materia '
+                        'en Canvas.') + f'<p><a href="{esc(CANVAS_INBOX)}" target="_blank" rel="noopener">'
+                 'Abrir la bandeja de Canvas</a></p>') if unread else ""
 
         def timeline(rows):
             return "".join(f'<li class="{esc(tone)}">{esc(r["texto"])}<small>'
@@ -1293,9 +1326,12 @@ class Wizard:
                    if pending
                    else panel.empty("Nada pendiente", "Esta materia está al día."))
                 + (f'<div class="card"><h2>Entregas y notas</h2><ul class="rows">{grades}</ul></div>' if grades else "")
+                + ('<div class="card"><h2>Comentarios del profesor</h2><p class="muted">De Canvas, según la última '
+                   'sincronización.</p>' + panel.feedback_list(feedback) + "</div>" if feedback else "")
                 + '<div class="card"><h2>Copiar contexto</h2><p>Copie este texto y péguelo al empezar el chat del '
                   'Project de esta materia en ChatGPT.</p>'
-                + panel.copy_box(f"contexto-{subject}", "Contexto de la materia", panel.brief_text(data)) + "</div>")
+                + panel.copy_box(f"contexto-{subject}", "Contexto de la materia", panel.brief_text(data, canvas))
+                + "</div>")
         side = ('<div class="card"><h2>Nueva tarea</h2>' + forms.new_task_form(csrf, subject, back) + "</div>"
                 + '<div class="card"><h2>Nueva decisión o nota</h2>'
                 + forms.new_note_form(csrf, subject, back) + "</div>"
@@ -1308,8 +1344,10 @@ class Wizard:
                                 i["tipo"] == "actividad_vencida" for i in pending) else "k-info"),
                             (len(data["entregas"]), "Entregas", "k-task"),
                             (len(graded), "Con nota", ""),
-                            (len(data["tareas"]), "Tareas abiertas", "k-todo"))
-                + f'<div class="grid"><div>{main}</div><aside>{side}</aside></div>')
+                            (len(data["tareas"]), "Tareas abiertas", "k-todo"),
+                            *([(panel.percent_text(canvas["nota"]), "Nota en Canvas", "k-ok")]
+                              if canvas.get("nota") is not None else []))
+                + inbox + f'<div class="grid"><div>{main}</div><aside>{side}</aside></div>')
         subtitle = (f'{subject} · Semestre {data["materia"].get("semestre_id") or ""} · última clase: '
                     f'{panel.day_text(data["materia"].get("ultima_clase")) or "sin clases"}')
         return self._panel("materias", title, body, csrf, subtitle=subtitle,
@@ -1341,6 +1379,64 @@ class Wizard:
                            subtitle="Cada cuadro tiene las instrucciones de un Project de ChatGPT. Cópielas en el "
                                     "campo «Instrucciones» del Project con el mismo nombre.")
 
+
+    # --- sincronizar ahora (la misma rutina que la tarea diaria) ------------------------
+    def _sync_running(self, runtime):
+        try:
+            return self.deps["sync_status"](runtime).get("estado") == "sincronizando"
+        except Exception as exc:  # noqa: BLE001 — si no se sabe, se ofrece el botón
+            print(f"Sincronización manual: estado ilegible ({type(exc).__name__}).", file=sys.stderr, flush=True)
+            return False
+
+    def _sync_card(self, runtime, csrf, system, *, compact=False):
+        """Última sincronización y el botón «Sincronizar ahora» (o el enlace al progreso)."""
+        last = (system or {}).get("ultimo_canvas_sync") or {}
+        state = {"ok": " ok", "error": " bad"}.get(last.get("status"), "")
+        if self._sync_running(runtime):
+            action = '<a class="more" href="/panel/sincronizar">Sincronizando… ver progreso →</a>'
+        else:
+            action = (f'<form method="post" action="/panel/sincronizar" class="inline-form">{csrf_field(csrf)}'
+                      '<button class="small">Sincronizar ahora</button></form>')
+        line = (f'<div class="sync{state}"><span class="dot"></span><p>{esc(_sync_text(system))}</p></div>')
+        if compact:
+            return f'<div class="card sync-bar">{line}{action}</div>'
+        return (f'<div class="card"><h2>Sincronización con Canvas</h2>{line}'
+                f'<div class="actions">{action}</div></div>')
+
+    def sync_now(self, csrf, **_):
+        from .manual_sync import SyncUnavailable
+        runtime = self._panel_runtime()
+        if runtime is None:
+            return self._register_problem(panel.NEED_SETUP, "/", csrf)
+        try:
+            self.deps["sync_start"](runtime)
+        except SyncUnavailable as exc:
+            return self._register_problem(str(exc), "/panel", csrf)
+        return Response(303, location="/panel/sincronizar")
+
+    def sync_page(self, csrf, **_):
+        runtime = self._panel_runtime()
+        if runtime is None:
+            return self._panel_setup("hoy", "Sincronizar con Canvas", csrf)
+        state = self.deps["sync_status"](runtime)
+        back = '<p><a href="/panel">← Volver a «Hoy»</a></p>'
+        if state.get("estado") == "sincronizando":
+            body = ('<div class="card msg" role="status"><p><span class="spinner" aria-hidden="true"></span>'
+                    'Sincronizando con Canvas… Trae actividades, notas y material, publica la base en Drive y '
+                    'actualiza el índice. Suele tardar unos minutos; esta página se actualiza sola y puede '
+                    'cerrarla: la sincronización sigue.</p></div>' + back)
+            return self._register_page("Sincronizando…", body, csrf, head='<meta http-equiv="refresh" content="3">')
+        if state.get("estado") == "listo":
+            body = f'<div class="card msg ok" role="status"><p>{esc(state.get("mensaje"))}</p></div>' + back
+            return self._register_page("Listo", body, csrf)
+        if state.get("estado") in ("error", "interrumpida"):
+            return self._register_page("No se pudo sincronizar", notice(state.get("mensaje") or "", bad=True)
+                                       + back, csrf)
+        body = ('<p>Trae de Canvas lo nuevo (actividades, notas, material), lo publica en Drive y actualiza el '
+                'índice, igual que la sincronización programada.</p>'
+                f'<form method="post" action="/panel/sincronizar">{csrf_field(csrf)}'
+                '<button>Sincronizar ahora</button></form>' + back)
+        return self._register_page("Sincronizar con Canvas", body, csrf)
 
     # --- registrar desde el panel (mismo contrato que el chat) -------------------------------
     def _register_page(self, title, body, csrf, status=200, head=""):
@@ -1436,6 +1532,11 @@ def _last_class(value, today):
         return "sin clases"
     rel = panel.relative(value, today)
     return f"{rel} ({text})" if rel else text
+
+
+def canvas_days():
+    from academic_access.canvas import NEW_DAYS
+    return NEW_DAYS
 
 
 def _grade_label(row):

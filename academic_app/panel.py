@@ -132,9 +132,59 @@ def _item_line(item, names):
     return "- " + " — ".join(pieces)
 
 
-def brief_text(brief):
-    """El resumen de una materia en texto plano, listo para pegar en el chat de su Project."""
+def percent_text(value):
+    """84.5 → '84.5 %' (nota actual de Canvas, en porcentaje)."""
+    return f"{number_text(round(value, 1) if isinstance(value, float) else value)} %"
+
+
+def score_text(score, possible):
+    if possible in (None, ""):
+        return number_text(score)
+    return f"{number_text(score)} de {number_text(possible)}"
+
+
+def canvas_subject(extras, subject):
+    """Datos de Canvas de una materia; vacío si no hay sincronización o no se pudieron leer."""
+    return ((extras or {}).get("materias") or {}).get(subject) or {}
+
+
+def canvas_chips(data):
+    """Nota actual y mensajes sin leer de una materia, como chips; nada si no hay datos."""
+    out = chip(f"Nota {percent_text(data['nota'])}", "k-ok") if data.get("nota") is not None else ""
+    unread = data.get("sin_leer")
+    if unread:
+        out += chip(count(unread, "mensaje sin leer", "mensajes sin leer"), "k-info")
+    return out
+
+
+def _rubric_line(r):
+    level = f" ({r['nivel']})" if r.get("nivel") else ""
+    note = f" — {r['comentario']}" if r.get("comentario") else ""
+    points = score_text(r["puntos"], r.get("de")) if r.get("puntos") is not None else "sin puntos"
+    return f"{r['criterio']}: {points}{level}{note}"
+
+
+def feedback_list(rows):
+    """Comentarios del profesor y rúbrica por actividad (texto escapado, nunca HTML de Canvas)."""
+    items = []
+    for row in rows:
+        grade = f"Nota {score_text(row['nota'], row.get('de'))}" if row.get("nota") is not None else ""
+        comments = "".join(f'<p>{esc(c["texto"])}<small>{esc(day_text(c.get("fecha")) or "sin fecha")}</small></p>'
+                           for c in row["comentarios"])
+        rubric = "".join(f"<li>{esc(_rubric_line(r))}</li>" for r in row["rubrica"])
+        items.append(f'<li><div class="grow"><strong>{esc(row["titulo"])}</strong>'
+                     + (f"<small>{esc(grade)}</small>" if grade else "")
+                     + comments + (f'<ul class="rubric">{rubric}</ul>' if rubric else "") + "</div></li>")
+    return f'<ul class="rows">{"".join(items)}</ul>'
+
+
+def brief_text(brief, canvas=None):
+    """El resumen de una materia en texto plano, listo para pegar en el chat de su Project.
+
+    `canvas` son los datos de Canvas de la materia (nota actual y comentarios del profesor), si los hay.
+    """
     subject = brief["materia"]
+    canvas = canvas or {}
     name = subject.get("nombre") or subject["materia_id"]
     term = subject.get("semestre_id") or "sin semestre"
     lines = [f"Contexto de la materia: {name} ({subject['materia_id']})",
@@ -142,6 +192,14 @@ def brief_text(brief):
              f"Fecha de hoy: {day_text(brief['fecha'])} (hora de Colombia)"]
     if subject.get("ultima_clase"):
         lines.append(f"Última clase: {day_text(subject['ultima_clase'])}")
+    if canvas.get("nota") is not None:
+        lines.append(f"Nota actual en Canvas: {percent_text(canvas['nota'])}")
+    feedback = []
+    for row in canvas.get("retroalimentacion") or []:
+        grade = f" ({score_text(row['nota'], row.get('de'))})" if row.get("nota") is not None else ""
+        feedback.append(f"- {row['titulo']}{grade}:")
+        feedback += [f"  - {c['texto']}" for c in row["comentarios"]]
+        feedback += [f"  - Rúbrica, {_rubric_line(r)}" for r in row["rubrica"]]
     names = {subject["materia_id"]: name}
     sections = [
         ("Pendientes", [_item_line(i, names) for i in brief["pendientes"]["items"]]),
@@ -155,6 +213,7 @@ def brief_text(brief):
                                  for r in brief["decisiones"]]),
         ("Resúmenes de clase recientes", [f"- {utc_day_text(r.get('creado_utc')) or 'sin fecha'}: {r['texto']}"
                                           for r in brief["resumenes_clase"]]),
+        ("Comentarios del profesor en Canvas", feedback),
     ]
     for title, rows in sections:
         if rows:

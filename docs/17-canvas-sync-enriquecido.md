@@ -58,7 +58,11 @@ Cada snapshot conserva `sha256` SHA-256 del contenido JSON normalizado, `capture
 - Foros: títulos, descripción/consigna, fechas y relación con assignment; no entradas/respuestas de compañeros.
 - Quizzes: título, instrucciones, fecha, tipo, número de preguntas/intentos, tiempo límite, relación con assignment; **no preguntas ni intentos**.
 - Anuncios: títulos, textos, fechas.
+- Retroalimentación de las propias entregas (sección `submissions`, `GET /courses/:id/students/submissions` con `submission_comments` y `rubric_assessment`): solo las entregas con comentarios o rúbrica calificada; por comentario, texto (máx. 4000 caracteres), fecha y `from_me` (si lo escribió el propio estudiante); por criterio, puntos, rating y comentario. **No** se guardan nombres, fotos ni IDs de autores. Va en una sección aparte, no en las filas de actividades, para no alterar las firmas de la revisión diaria. Sin permiso (403/404) queda `forbidden`/`not_found`, sin fallar.
 - Agenda del usuario: inscripciones propias (resumen de nota), `todo`, `upcoming` y `planner` en ventana dinámica desde 45 días antes hasta 150 días después de la fecha local.
+- Mensajes sin leer (sección `unread_messages`, `GET /conversations?scope=unread`): **solo conteos** `{by_course: {curso: n}, other: n}`. Asuntos, textos y participantes se descartan dentro de la función de lectura. Nunca se abre una conversación (`/conversations/:id` la marcaría como leída).
+
+Estas dos secciones suman una consulta por curso y una por usuario (con 5 cursos, 6 más por corrida; el presupuesto sigue siendo `MAX_REQUESTS = 180`). Se quedan en el PC: no van a la base, a Drive ni al índice de conocimiento.
 
 La clasificación `kind_hint` es **provisional** (`nota_agregada`, `informativo`, `informativo_o_evaluable`, `complementaria`, `cuestionario`, `foro_evaluable` o `actividad_por_revisar`). `classification_confirmed=false` en todas las actividades hasta revisión; **no se pueden importar a Excel automáticamente**. Especialmente `Nota final [P1]` no es una tarea ordinaria, y los enlaces de clase o grabaciones no son necesariamente obligaciones de entrega.
 

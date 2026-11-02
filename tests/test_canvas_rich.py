@@ -75,6 +75,27 @@ class MockCanvas:
             return [{"id": 1, "title": "Actividad"}]
         if path.endswith("/upcoming_events"):
             return [{"id": 2, "title": "Actividad próxima"}]
+        if path.endswith("/students/submissions"):
+            assert params["include[]"] == ["submission_comments", "rubric_assessment"]
+            return [{"id": 7001, "assignment_id": 391671, "user_id": 999, "score": 18,
+                     "submission_comments": [
+                         {"id": 1, "author_id": 555, "author_name": "Profesora Ana",
+                          "author": {"avatar_image_url": "https://avatar.example/a.png"},
+                          "comment": "Buen trabajo, revisa la normalización.",
+                          "created_at": "2026-10-01T10:00:00Z"},
+                         {"id": 2, "author_id": 999, "author_name": "Estudiante Uno",
+                          "comment": "Gracias", "created_at": "2026-10-01T11:00:00Z"}],
+                     "rubric_assessment": {"criterion-1": {"points": 18, "rating_id": "r",
+                                                           "comments": "Falta un ejemplo"}}},
+                    {"id": 7002, "assignment_id": 391692, "user_id": 999,
+                     "submission_comments": [], "rubric_assessment": None}]
+        if path.endswith("/conversations"):
+            assert params["scope"] == "unread"
+            return [{"id": 1, "subject": "Asunto privado", "last_message": "Cuerpo privado",
+                     "participants": [{"name": "Docente X"}], "context_code": "course_82862"},
+                    {"id": 2, "subject": "Asunto privado", "context_code": None,
+                     "audience_contexts": {"courses": {"82862": ["TeacherEnrollment"]}}},
+                    {"id": 3, "subject": "Asunto privado", "context_code": "course_1"}]
         if path.endswith("/planner/items"):
             return [{"plannable_id": 391671, "plannable_type": "assignment",
                      "plannable": {"title": "Evaluación de Eje 1"}}]
@@ -188,9 +209,65 @@ class RichSyncTests(unittest.TestCase):
     def test_quiz_questions_are_not_requested(self):
         client = MockCanvas("fake-secret")
         build_course(client, 82862)
-        self.assertTrue(all("/questions" not in a and "/submissions" not in a
+        # Only the student's own submissions list; never quiz questions or quiz submissions.
+        self.assertTrue(all("/questions" not in a and "/quizzes/" not in a
+                            and ("/submissions" not in a or a.endswith("/students/submissions"))
                             for a in client.actions))
         self.assertTrue(all(not a.startswith("POST") for a in client.actions))
+
+    def test_teacher_comments_and_rubric_are_kept_without_names(self):
+        client = MockCanvas("fake-secret")
+        rich = build_course(client, 82862)
+        section = rich["sections"]["submissions"]
+        self.assertEqual(section["status"], "ok")
+        self.assertIn("GET /api/v1/courses/82862/students/submissions", client.actions)
+        rows = section["data"]
+        self.assertEqual([r["assignment_id"] for r in rows], [391671])  # without feedback → not kept
+        comments = rows[0]["comments"]
+        self.assertEqual([c["text"] for c in comments], ["Buen trabajo, revisa la normalización.", "Gracias"])
+        self.assertEqual([c["from_me"] for c in comments], [False, True])
+        self.assertEqual(comments[0]["created_at"], "2026-10-01T10:00:00Z")
+        self.assertEqual(rows[0]["rubric"], {"criterion-1": {"points": 18, "rating_id": "r",
+                                                              "comments": "Falta un ejemplo"}})
+        dumped = json.dumps(rich)
+        for private in ("Profesora Ana", "avatar.example", "Estudiante Uno"):
+            self.assertNotIn(private, dumped)
+        # Feedback lives in a section: assignment rows (review signatures) are unchanged.
+        self.assertEqual(rich["assignments"], normalize("assignments", client.assignments(82862)))
+
+    def test_submissions_forbidden_is_not_a_failure(self):
+        class Denied(MockCanvas):
+            def pages(self, path, params=None):
+                if path.endswith("/students/submissions"):
+                    raise SyncError("Sin permisos para esta consulta (HTTP 403).")
+                return super().pages(path, params)
+        rich = build_course(Denied("fake-secret"), 82862)
+        self.assertEqual(rich["sections"]["submissions"], {"status": "forbidden", "data": None})
+
+    def test_long_comment_is_truncated(self):
+        rows = normalize("submissions", [{"id": 1, "assignment_id": 2, "user_id": 3,
+                                          "submission_comments": [{"author_id": 4, "comment": "x" * 9000}]}])
+        self.assertEqual(len(rows[0]["comments"][0]["text"]), 4000)
+
+    def test_unread_messages_are_only_counted_per_course(self):
+        client = MockCanvas("fake-secret")
+        user = build_user(client, [82862, 82863], today=date(2026, 11, 2))
+        unread = user["sections"]["unread_messages"]
+        self.assertEqual(unread, {"status": "ok", "data": {"by_course": {"82862": 2, "82863": 0}, "other": 1}})
+        self.assertIn("GET /api/v1/conversations", client.actions)
+        self.assertTrue(all(not a.startswith("GET /api/v1/conversations/") for a in client.actions))
+        dumped = json.dumps(user)
+        for private in ("Asunto privado", "Cuerpo privado", "Docente X"):
+            self.assertNotIn(private, dumped)
+
+    def test_unread_messages_unavailable_is_not_a_failure(self):
+        class Denied(MockCanvas):
+            def pages(self, path, params=None):
+                if path.endswith("/conversations"):
+                    raise SyncError("Canvas respondió HTTP 404.")
+                return super().pages(path, params)
+        user = build_user(Denied("fake-secret"), [82862], today=date(2026, 11, 2))
+        self.assertEqual(user["sections"]["unread_messages"], {"status": "unavailable", "data": None})
 
 
 if __name__ == "__main__":

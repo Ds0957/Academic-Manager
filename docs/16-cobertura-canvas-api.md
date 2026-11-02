@@ -87,3 +87,25 @@ Referencia: [Throttling oficial de Canvas](https://developerdocs.instructure.com
 7. Tras validar un caso real por materia, proponer mapeo mínimo a la base V2.1; **sin escritura automática ni modificación de `database.xlsx` hasta aprobar reglas de reconciliación y conservar el protocolo de publicación**.
 
 **Pendientes exploratorios:** comportamiento de archivos descargables, PDFs, contenido HTML incrustado vía herramientas externas/LTI, calendarios, conferencias y grabaciones institucionales, soporte de anuncios del planificador frente al endpoint global; comprobación de cambios reales a través del tiempo y qué endpoints activan estados de lectura. Las consultas de cuentas/admin, datos personales de compañeros, respuestas de exámenes y APIs de escritura quedan **fuera de alcance**, aunque existan en el catálogo general de Instructure.
+
+## Auditoría extra: `canvas_sync audit-extra` (2026-10-31)
+
+Recursos de la [documentación oficial](https://developerdocs.instructure.com/services/canvas) que esta auditoría no cubrió y que podrían servir. La documentación casi nunca dice qué puede ver un estudiante, así que el comando lo comprueba con la cuenta real:
+
+```powershell
+& "C:\AcademicManagerDev\Academic-Manager\scripts\canvas-sync.cmd" audit-extra
+```
+
+| Consulta (solo GET) | Qué mide |
+|---|---|
+| `GET /courses/:id/students/submissions?include[]=submission_comments&include[]=rubric_assessment` | Entregas propias: cuántas tienen comentarios del docente y puntaje por rúbrica; marcas `missing`, `late`, `excused`, `graded_at` |
+| `GET /courses/:id/grading_periods` | Periodos de calificación y sus títulos (¿coinciden con los bloques?) |
+| `GET /courses/:id/media_objects` | Videos del curso y si traen pistas de subtítulos (tipo e idioma) |
+| `GET /courses/:id/smartsearch?q=evaluación` | Si la búsqueda inteligente (beta, disponibilidad limitada) está activa |
+| `GET /users/self/enrollments?include[]=current_points` | Qué campos de nota por materia llegan (`current_score`, `final_score`…) |
+| `GET /conversations/unread_count` y `GET /conversations?scope=unread` | Cuántos mensajes sin leer hay y qué campos trae el listado |
+| `GET /planner/items?filter=new_activity` | Novedades: tipos y marcas `with_feedback`, `missing`, `graded`, `late` |
+
+Guarda en `procesamiento/canvas-sync/coverage/extra-latest.json` (y una copia con fecha) **solo conteos, estados HTTP y nombres de campos**: nunca comentarios, asuntos, cuerpos, nombres de personas, notas ni títulos de videos. **No abre mensajes**: `GET /conversations/:id` los marca como leídos (`auto_mark_as_read` vale `true` por omisión), así que solo usa el conteo y el listado. Imprime un resumen en texto, seguro para compartir. Un 403 o 404 queda registrado por consulta y no detiene las demás. Usa el cliente GET-only con presupuesto de `sync-rich` y comprueba que la cuenta no cambió.
+
+Descartados por escribir en Canvas: **What-If Grades** (`PUT`, guarda puntajes hipotéticos; se puede calcular localmente con los pesos de los grupos de actividades) y **Study Assist** (`POST`).

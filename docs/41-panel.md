@@ -19,13 +19,24 @@ Arriba de cada página está la barra con el menú **Hoy · Resumen · Materias 
 
 | Página | Qué muestra | De dónde sale |
 |---|---|---|
-| **Hoy** (`/panel`) | Contadores (atrasado, esta semana, más adelante, sin fecha) y tarjetas agrupadas por fecha (Atrasado, Hoy, Mañana, Esta semana, Más adelante, Sin fecha); dentro de cada grupo se conserva el orden de `today` (lo más urgente arriba). Cada tarjeta lleva la fecha, el tipo con su color, la materia y el motivo; arriba, los avisos del sistema en lenguaje sencillo (sincronización con Canvas que falla o no corre, token de Canvas por vencer, índice desactualizado). | `today` ([34-today.md](34-today.md)) y `summary` ([35-summary.md](35-summary.md)) |
-| **Resumen** (`/panel/resumen`) | Semestre activo con contadores por tipo (vencidas, por entregar, tareas, clases sin procesar); en dos columnas, lo más urgente y, al lado, sus materias con la última clase, notas y tareas recientes y la última sincronización con Canvas. | `summary` |
-| **Materias** (`/panel/materias`) | Las materias del semestre activo en tarjetas, con la última clase y cuántos pendientes y vencidas tiene cada una. | `summary` y `today` (solo para contar; si falla, la página sale sin los conteos) |
-| **Materia** (`/panel/materia/MAT-…`) | Formularios **Nueva tarea** y **Nueva decisión o nota**, botones de registro en cada pendiente, entrega y tarea abierta; contadores (pendientes, entregas, con nota, tareas abiertas), pendientes y fechas, entregas y notas con su estado, tareas abiertas, decisiones vigentes, resúmenes de clase y el cuadro **Copiar contexto**: el resumen de la materia en texto plano (fechas en hora de Colombia), listo para pegar al empezar el chat de su Project. | `subject-brief` |
+| **Hoy** (`/panel`) | Contadores (atrasado, esta semana, más adelante, sin fecha) y tarjetas agrupadas por fecha (Atrasado, Hoy, Mañana, Esta semana, Más adelante, Sin fecha); dentro de cada grupo se conserva el orden de `today` (lo más urgente arriba). Cada tarjeta lleva la fecha, el tipo con su color, la materia y el motivo; arriba, los avisos del sistema en lenguaje sencillo (sincronización con Canvas que falla o no corre, token de Canvas por vencer, índice desactualizado). Si hay actividades calificadas en Canvas en los últimos 7 días, el bloque **Notas nuevas en Canvas** con su nota y fecha. | `today` ([34-today.md](34-today.md)), `summary` ([35-summary.md](35-summary.md)) y datos de Canvas |
+| **Resumen** (`/panel/resumen`) | Semestre activo con contadores por tipo (vencidas, por entregar, tareas, clases sin procesar); en dos columnas, lo más urgente y, al lado, sus materias con la última clase, notas y tareas recientes y la última sincronización con Canvas. Junto a cada materia, su nota actual en Canvas y los mensajes sin leer. | `summary` y datos de Canvas |
+| **Materias** (`/panel/materias`) | Las materias del semestre activo en tarjetas, con la última clase, cuántos pendientes y vencidas tiene cada una, su nota actual en Canvas y los mensajes sin leer. | `summary`, `today` (solo para contar; si falla, la página sale sin los conteos) y datos de Canvas |
+| **Materia** (`/panel/materia/MAT-…`) | Formularios **Nueva tarea** y **Nueva decisión o nota**, botones de registro en cada pendiente, entrega y tarea abierta; contadores (pendientes, entregas, con nota, tareas abiertas), pendientes y fechas, entregas y notas con su estado, tareas abiertas, decisiones vigentes, resúmenes de clase y el cuadro **Copiar contexto**: el resumen de la materia en texto plano (fechas en hora de Colombia), listo para pegar al empezar el chat de su Project (incluye la nota actual y los comentarios del profesor de Canvas). Con datos de Canvas: contador **Nota en Canvas**, aviso de mensajes sin leer con enlace a la bandeja de Canvas y el cuadro **Comentarios del profesor** (texto y rúbrica de cada entrega). | `subject-brief` y datos de Canvas |
 | **Instrucciones** (`/panel/instrucciones`) | Un cuadro por Project (Coordinador y cada materia activa) con sus instrucciones para ChatGPT. | `academic_projects.render_all` ([29-preparacion-chatgpt-projects.md](29-preparacion-chatgpt-projects.md)), en memoria; no escribe archivos |
 
 Una materia que no está en el semestre activo responde «no encontrada». Cada cuadro tiene un botón **Copiar** que lo copia al portapapeles y muestra «Copiado ✓». Si el navegador no deja copiar, el botón lo indica y selecciona el texto para copiarlo con Ctrl+C; sin el script, el botón no aparece y el texto se copia a mano.
+
+## Datos de Canvas
+
+Salen de las copias locales que guarda la sincronización diaria ([17-canvas-sync-enriquecido.md](17-canvas-sync-enriquecido.md)), leídas por `academic_access.canvas.canvas_extras`: la página no consulta Canvas, no escribe nada y no usa la base. Se muestran solo para las materias del semestre activo, según el registro de cursos.
+
+- **Nota actual:** la nota que Canvas calcula para la materia, en porcentaje.
+- **Mensajes sin leer:** solo el número por materia; la sincronización nunca guarda asuntos ni textos y nunca abre un mensaje (abrirlo lo marcaría como leído). El enlace lleva a la bandeja de Canvas.
+- **Comentarios del profesor:** los de cada entrega propia y la rúbrica calificada (criterio, puntos, nivel y comentario), sin nombres de autores; las respuestas propias no se muestran.
+- **Notas nuevas:** actividades calificadas en los últimos 7 días (hora de Colombia).
+
+Si todavía no hay sincronización, o las copias no superan su comprobación SHA-256, las páginas salen sin estos datos y sin aviso; el resto sigue igual.
 
 ## Cuando los datos no están al día
 
@@ -36,6 +47,15 @@ Nunca se muestra el texto de un error ni una página de fallo interno; el regist
 - **Sin semestre activo con materias:** elegir las materias del semestre en Configuración → Materias.
 - **Índice de búsqueda desactualizado** (solo afecta a Instrucciones): botón «Actualizar el índice» (la misma acción que ofrece el paso Materias después de publicar).
 - **Archivo ilegible:** revisar que la carpeta de datos exista y que Google Drive esté abierto.
+
+## Sincronizar ahora
+
+En «Hoy» (arriba) y en «Resumen» (tarjeta «Sincronización con Canvas») aparece la última sincronización y el botón **Sincronizar ahora**. Ejecuta la misma rutina que la tarea diaria (`scripts/canvas-daily.ps1`: Canvas → base publicada en Drive, material de estudio e índice), como proceso aparte y sin ventana, con la carpeta de datos de esta instalación. Deja el mismo `latest-status.json` y el mismo historial, así que el panel muestra el resultado como cualquier sincronización.
+
+- `POST /panel/sincronizar` la lanza y abre **Sincronizando…** (`GET /panel/sincronizar`), que se recarga cada 3 segundos sin scripts hasta decir **Listo** o explicar el problema. Se puede cerrar la página: la sincronización sigue.
+- Mientras corre una sincronización manual, el botón se cambia por el enlace al progreso y no se lanza otra. Si coincide con la programada, los bloqueos de `canvas_sync` lo impiden y se informa que la base estaba ocupada.
+- Resultado en lenguaje sencillo, nunca el registro: listo; token de Canvas vencido; base ocupada; error genérico; o interrumpida si no hubo resultado en 45 minutos. El estado vive en `procesamiento/canvas-sync/manual-sync.json`.
+- Solo funciona en Windows (donde está la instalación); en otro sistema lo dice.
 
 ## Registrar desde el panel
 

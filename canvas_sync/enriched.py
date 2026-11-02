@@ -154,6 +154,63 @@ def assignment_row(raw):
     return row
 
 
+COMMENT_LIMIT = 4000
+
+
+def feedback_row(raw):
+    """Teacher feedback on the student's own submission: text, date and rubric only.
+
+    Names, avatars and author ids are dropped; `from_me` tells the student's own replies apart.
+    """
+    student = raw.get("user_id")
+    comments = []
+    for c in raw.get("submission_comments") or []:
+        if not isinstance(c, dict) or not isinstance(c.get("comment"), str):
+            continue
+        comments.append({"text": c["comment"][:COMMENT_LIMIT], "created_at": c.get("created_at"),
+                         "from_me": student is not None and c.get("author_id") == student})
+    rubric = {}
+    assessment = raw.get("rubric_assessment")
+    if isinstance(assessment, dict):
+        for criterion, value in assessment.items():
+            if isinstance(value, dict):
+                note = value.get("comments")
+                rubric[str(criterion)] = {"points": value.get("points"), "rating_id": value.get("rating_id"),
+                                          "comments": note[:COMMENT_LIMIT] if isinstance(note, str) else None}
+    assignment = raw.get("assignment_id")
+    return {"assignment_id": assignment if type(assignment) is int else None,
+            "comments": comments, "rubric": rubric}
+
+
+def conversation_course(raw):
+    """Course id of an unread conversation, from its context; None when it is not one course."""
+    code = raw.get("context_code")
+    if isinstance(code, str) and code.startswith("course_") and code[7:].isdigit():
+        return int(code[7:])
+    audience = raw.get("audience_contexts")
+    courses = audience.get("courses") if isinstance(audience, dict) else None
+    if isinstance(courses, dict) and len(courses) == 1:
+        key = next(iter(courses))
+        if str(key).isdigit():
+            return int(key)
+    return None
+
+
+def unread_counts(rows, course_ids):
+    """Only counts per course; subjects, bodies and participants never leave this function."""
+    if not isinstance(rows, list):
+        raise SyncError("Canvas devolvió una lista inválida de mensajes.")
+    counts = {str(c): 0 for c in sorted(course_ids)}
+    other = 0
+    for row in rows:
+        course = conversation_course(row) if isinstance(row, dict) else None
+        if course in course_ids:
+            counts[str(course)] += 1
+        else:
+            other += 1
+    return {"by_course": counts, "other": other}
+
+
 def normalize(name, rows):
     if name == "pages":
         if not isinstance(rows, list) or any(not isinstance(x, dict)
@@ -187,6 +244,10 @@ def normalize(name, rows):
         return sorted([fields(x, ("url", "title", "published", "front_page",
                                   "updated_at", "html_url")) for x in rows],
                       key=lambda x: x["url"] or "")
+    if name == "submissions":
+        kept = [feedback_row(x) for x in rows]
+        return sorted([r for r in kept if r["comments"] or r["rubric"]],
+                      key=lambda x: (x["assignment_id"] or 0))
     if name == "announcements":
         return sorted([{**fields(x, ("id", "title", "html_url", "posted_at",
                                      "delayed_post_at", "discussion_topic_id")),
@@ -251,6 +312,9 @@ def build_course(client, course_id):
         ("pages", base + "/pages", {"per_page": 100}),
         ("announcements", "/api/v1/announcements",
          {"per_page": 100, "context_codes[]": [f"course_{course_id}"]}),
+        # The student's own submissions with teacher comments and rubric (not quiz submissions).
+        ("submissions", base + "/students/submissions",
+         {"per_page": 100, "include[]": ["submission_comments", "rubric_assessment"]}),
     ]
     for name, path, params in opts:
         dataset["sections"][name] = optional_pages(client, path, params, name=name)
@@ -316,6 +380,8 @@ def build_user(client, course_ids, today=None):
         ("upcoming", "/api/v1/users/self/upcoming_events", {"per_page": 100}),
         ("planner", "/api/v1/planner/items",
          {"per_page": 100, "start_date": beginning.isoformat(), "end_date": ending.isoformat()}),
+        # Listing only: opening a conversation (/conversations/:id) would mark it as read.
+        ("unread_messages", "/api/v1/conversations", {"scope": "unread", "per_page": 50}),
     ]
     wanted = set(course_ids)
     for name, path, params in configs:
@@ -326,7 +392,9 @@ def build_user(client, course_ids, today=None):
                 result["sections"][name] = {"status": "unavailable", "data": None}
                 continue
             raise
-        if name == "enrollments":
+        if name == "unread_messages":
+            filtered = unread_counts(rows, wanted)
+        elif name == "enrollments":
             filtered = []
             for r in rows:
                 if not isinstance(r, dict) or r.get("course_id") not in wanted:

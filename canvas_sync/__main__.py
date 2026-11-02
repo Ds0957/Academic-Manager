@@ -25,7 +25,7 @@ from .semester import (load_registry, active_mappings, list_canvas_courses,
 
 def main(argv=None):
     p = argparse.ArgumentParser(description="Canvas Sync: consulta GET y sincronización segura con Excel")
-    p.add_argument("action", choices=("login", "status", "courses", "sync", "sync-rich", "sync-study", "pdf", "renew", "reconcile-preview", "daily", "courses-review", "onboard", "block-set", "course-blocks", "blocks-preview", "blocks-publish", "blocks-refresh", "enroll-preview", "enroll-publish", "activities-review", "activities-preview"))
+    p.add_argument("action", choices=("login", "status", "courses", "sync", "sync-rich", "sync-study", "pdf", "renew", "reconcile-preview", "daily", "courses-review", "onboard", "block-set", "course-blocks", "blocks-preview", "blocks-publish", "blocks-refresh", "enroll-preview", "enroll-publish", "activities-review", "activities-preview", "audit-extra"))
     p.add_argument("--runtime", default=None,
                    help="Carpeta de datos (por defecto ACADEMIC_MANAGER_DATA o la del archivo de configuración del usuario; "
                         "en Windows C:\\AcademicManagerData)")
@@ -59,6 +59,9 @@ def main(argv=None):
             list_courses(runtime)
         elif args.action == "sync-rich":
             sync_rich(runtime, course_id=args.course_id, all_active=args.all_active)
+        elif args.action == "audit-extra":
+            from . import coverage
+            print(coverage.summary(coverage.audit(runtime)))
         elif args.action == "sync-study":
             sync_study(runtime, course_id=args.course_id, all_active=args.all_active,
                        full_refresh=args.full_refresh, approved_only=args.approved_only)

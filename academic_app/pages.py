@@ -162,6 +162,9 @@ details.reg .inline-form { background:var(--soft); border:1px solid var(--line);
                            padding:6px 12px 12px; margin-top:6px; }
 .two { display:grid; grid-template-columns:1fr 1fr; gap:0 10px; }
 .small { font-size:.82rem; margin:6px 0 0; }
+.sync-bar { display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; justify-content:space-between;
+            padding:12px 18px; }
+.sync-bar .more { margin-top:0; }
 .msg.ok { border-left-color:var(--ok); background:var(--ok-soft); }
 .empty strong { display:block; color:var(--text); font-size:1.1rem; margin-bottom:4px; }
 .copy-box label { margin-top:4px; }
