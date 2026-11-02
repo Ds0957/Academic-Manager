@@ -12,3 +12,6 @@ google-auth-oauthlib==1.5.0
 tzdata==2026.5
 # Pairing QR for the phone access (academic_app/qr.py, docs/42): pure Python, drawn locally as SVG.
 segno==1.6.6
+# Claude Desktop connector (academic_mcp, docs/43): official MCP SDK; it negotiates both the legacy
+# `initialize` handshake and the stateless 2026-07-28 revision.
+mcp==2.3.0

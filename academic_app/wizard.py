@@ -10,7 +10,8 @@
   (lista, onboard) y workbook_enrollment (publicación);
 - tarea diaria: scripts/install-canvas-daily-task.ps1 vía academic_app.daily_task;
 - panel del día a día (solo lectura): academic_access today/summary/subject_brief y
-  academic_projects.render_all, vía academic_app.panel.
+  academic_projects.render_all, vía academic_app.panel;
+- Claude Desktop (opcional): academic_app.claude_desktop agrega o quita el conector academic_mcp.
 
 El estado de cada paso se lee de los archivos reales, así que el asistente se puede
 cerrar y retomar. Nunca se muestran tokens, secretos ni códigos de Google.
@@ -28,7 +29,7 @@ from pathlib import Path
 
 from academic_config import paths
 
-from . import forms, panel, registrar
+from . import claude_desktop, forms, panel, registrar
 from .pages import Response, badge, csrf_field, esc, layout, notice
 
 SEMESTER = re.compile(r"20\d{2}-[1-3]")
@@ -438,7 +439,9 @@ class Wizard:
                   ("GET", "/celular"): self.page_phone, ("POST", "/celular/activar"): self.phone_enable,
                   ("POST", "/celular/iniciar"): self.phone_start, ("POST", "/celular/qr"): self.phone_qr,
                   ("POST", "/celular/quitar"): self.phone_revoke, ("POST", "/celular/pin"): self.phone_pin,
-                  ("POST", "/celular/desactivar"): self.phone_disable}
+                  ("POST", "/celular/desactivar"): self.phone_disable,
+                  ("GET", "/claude"): self.page_claude, ("POST", "/claude/conectar"): self.claude_connect,
+                  ("POST", "/claude/quitar"): self.claude_disconnect}
         action = routes.get((method, path))
         if action is None and method == "GET" and path.startswith(SUBJECT_PAGE):
             action = functools.partial(self.panel_subject, subject=path[len(SUBJECT_PAGE):])
@@ -507,7 +510,7 @@ class Wizard:
         body = (self._update_card(csrf) + (notice(error, bad=True) if error else "") + ready
                 + '<p>Este asistente prepara Academic Manager en este PC paso a paso. Puede cerrarlo '
                 'cuando quiera: lo que ya hizo queda guardado y al volver verá en qué paso va.</p>'
-                + self._take_flash() + "".join(rows) + self._phone_row()
+                + self._take_flash() + "".join(rows) + self._phone_row() + self._claude_row()
                 + f'<form method="post" action="/cerrar">{csrf_field(csrf)}'
                   '<button class="secondary">Cerrar el asistente</button></form>'
                 + _version_line())
@@ -1679,6 +1682,80 @@ class Wizard:
                 '<p><a href="/celular">← Volver a «Acceso desde el celular»</a></p></div>')
         return Response(200, layout("Código QR para el celular", body, back=False))
 
+    # --- Claude Desktop (opcional; docs/43-conector-claude.md) -------------------------------
+    def _claude_env(self):
+        return self.deps.get("claude_env")  # None: las variables reales (APPDATA, LOCALAPPDATA)
+
+    def _claude_row(self):
+        state = claude_desktop.status(self._panel_runtime(), env=self._claude_env())["estado"]
+        return ('<div class="card step"><div><strong>Claude Desktop</strong> '
+                f'<span class="muted">(opcional) · {esc(CLAUDE_SHORT[state])}</span><br><span class="muted">'
+                'Que Claude Desktop lea sus datos de Academic Manager durante la conversación.</span></div>'
+                '<a href="/claude">Abrir</a></div>')
+
+    def page_claude(self, csrf, error=None, status=200, **_):
+        runtime = self._panel_runtime()
+        state = claude_desktop.status(runtime, env=self._claude_env())
+        key = state["estado"]
+        head = self._take_flash() + (notice(error, bad=True) if error else "")
+        card = (f'<div class="card"><h2>Estado</h2><p>{badge(CLAUDE_BADGE[key])} {esc(state["mensaje"])}</p>')
+        if runtime is None:
+            card += notice(CLAUDE_NO_DATA, bad=True)
+        elif key in (claude_desktop.NOT_CONNECTED, claude_desktop.OUTDATED, claude_desktop.CONNECTED):
+            label = {claude_desktop.NOT_CONNECTED: "Conectar con Claude Desktop",
+                     claude_desktop.OUTDATED: "Actualizar conexión"}.get(key)
+            if label:
+                card += (f'<form method="post" action="/claude/conectar">{csrf_field(csrf)}'
+                         f'<button>{esc(label)}</button></form>')
+            if key != claude_desktop.NOT_CONNECTED:
+                card += (f'<form method="post" action="/claude/quitar">{csrf_field(csrf)}'
+                         '<button class="secondary">Quitar conexión</button></form>')
+        card += "</div>"
+        failed = bool(error) or key == claude_desktop.UNREADABLE
+        body = (head + CLAUDE_INTRO + card + self._claude_manual(runtime, state["ruta"], failed)
+                + '<div class="card"><h2>Instrucciones para Claude</h2><p>Péguelas en las instrucciones de un '
+                  'proyecto de Claude (o al empezar una conversación) para que Claude use bien el conector.</p>'
+                + panel.copy_box("instrucciones-claude", "Instrucciones para Claude", CLAUDE_INSTRUCTIONS)
+                + "</div>")
+        return Response(status, layout("Claude Desktop", body))
+
+    @staticmethod
+    def _claude_manual(runtime, path, failed):
+        if runtime is None:
+            return ""
+        where = str(path) if path else CLAUDE_DEFAULT_PATH
+        steps = ('<p>Abra Claude Desktop y vaya a Configuración → Desarrollador → «Editar configuración», o abra '
+                 f'con el Bloc de notas este archivo:</p><pre>{esc(where)}</pre><p>Si el archivo está vacío o no '
+                 'existe, pegue todo el texto de abajo. Si ya tiene «mcpServers», agregue solo la parte de '
+                 '«academic-manager» dentro de él, sin borrar los demás conectores. Guarde el archivo, cierre '
+                 'Claude Desktop por completo (también desde la bandeja del sistema) y vuelva a abrirlo.</p>'
+                 + panel.copy_box("claude-manual", "Texto para la configuración de Claude Desktop",
+                                  claude_desktop.manual_snippet(runtime)))
+        if failed:
+            return f'<div class="card msg bad"><h2>Hacerlo a mano</h2>{steps}</div>'
+        return f'<div class="card"><details><summary>Hacerlo a mano</summary>{steps}</details></div>'
+
+    def _claude_action(self, csrf, action, done, unchanged):
+        runtime = self._panel_runtime()
+        if runtime is None:
+            return self.page_claude(csrf, error=CLAUDE_NO_DATA, status=400)
+        try:
+            result = action(runtime, env=self._claude_env())
+        except claude_desktop.ClaudeDesktopError as exc:
+            return self.page_claude(csrf, error=str(exc), status=400)
+        if not result["cambio"]:
+            return self._done("/claude", unchanged)
+        backup = " Se guardó una copia de la configuración anterior junto al archivo." if result["copia"] else ""
+        return self._done("/claude", done + backup)
+
+    def claude_connect(self, csrf, **_):
+        return self._claude_action(csrf, claude_desktop.connect, CLAUDE_DONE,
+                                   "Ya estaba conectado; no hubo que cambiar nada.")
+
+    def claude_disconnect(self, csrf, **_):
+        return self._claude_action(csrf, claude_desktop.disconnect, CLAUDE_REMOVED,
+                                   "No había conexión con Academic Manager que quitar.")
+
 
 def _pin_fields():
     return ('<label for="pin">PIN (de 6 a 12 números)</label><input type="password" id="pin" name="pin" '
@@ -1710,6 +1787,35 @@ PHONE_SAFETY = ('<div class="card msg"><h2>Seguridad</h2><p>Dentro del Wi-Fi la 
                 'público ni en el de la universidad.</p><p>La primera vez, Windows puede preguntar si permite '
                 'a Python usar la red: permítalo solo en <strong>redes privadas</strong>, nunca en redes '
                 'públicas.</p></div>')
+
+CLAUDE_SHORT = {claude_desktop.NOT_INSTALLED: "No instalado", claude_desktop.NOT_CONNECTED: "Sin conectar",
+                claude_desktop.CONNECTED: "Conectado", claude_desktop.OUTDATED: "Hay que actualizar",
+                claude_desktop.UNREADABLE: "Hay que revisar"}
+CLAUDE_BADGE = {claude_desktop.NOT_INSTALLED: "falta", claude_desktop.NOT_CONNECTED: "falta",
+                claude_desktop.CONNECTED: "hecho", claude_desktop.OUTDATED: "falta",
+                claude_desktop.UNREADABLE: "error"}
+CLAUDE_NO_DATA = "Conectar Claude Desktop necesita la carpeta de datos. " + NEED_DATA
+CLAUDE_DEFAULT_PATH = r"%APPDATA%\Claude\claude_desktop_config.json"
+CLAUDE_DONE = ("Listo. Cierre Claude Desktop por completo (también desde la bandeja del sistema) y vuelva a "
+               "abrirlo.")
+CLAUDE_REMOVED = ("Se quitó la conexión. Cierre Claude Desktop por completo (también desde la bandeja del "
+                  "sistema) y vuelva a abrirlo.")
+CLAUDE_INTRO = ('<div class="card"><p>Con este botón, <strong>Claude Desktop</strong> (con su suscripción de '
+                'Claude, sin pagos aparte) puede leer sus datos de Academic Manager en este PC durante la '
+                'conversación: qué hay para hoy, cómo va cada materia, notas, tareas y material de estudio.</p>'
+                '<p>Por ahora es <strong>solo lectura</strong>: Claude no puede cambiar nada. Desktop Commander y '
+                'sus otros conectores siguen funcionando igual.</p><p>Antes de cambiar la configuración de '
+                'Claude Desktop se guarda una copia de seguridad junto a ella.</p></div>')
+CLAUDE_INSTRUCTIONS = (
+    "Usa el conector «academic-manager» (Academic Manager) para todo lo de la universidad.\n\n"
+    "1. Al empezar cada conversación, llama primero a ponerme_al_dia (con la materia, si vamos a hablar de "
+    "una en particular) y responde con esa información.\n"
+    "2. Para preguntas sobre el material de una materia, usa buscar y después leer_fuente, y cita la fuente "
+    "de cada dato (el nombre del archivo o de la clase). Si no lo encuentras, dilo; no lo inventes.\n"
+    "3. Para registrar entregas, notas, tareas o decisiones, usa Academic Manager: el panel o, cuando existan, "
+    "las herramientas de escritura del conector, siempre con vista previa y mi aprobación.\n"
+    "4. Aunque tengas Desktop Commander u otro acceso a los archivos del PC, nunca edites directamente los "
+    "datos, la base de datos ni los archivos de Academic Manager.")
 
 
 def _last_class(value, today):

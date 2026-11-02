@@ -97,6 +97,10 @@ Registra la tarea programada de Windows `AcademicManager-CanvasDaily` (08:00 y 1
 
 Debajo de los pasos, **Acceso desde el celular** (`/celular`) activa el panel desde el celular en el mismo Wi-Fi: PIN, código QR para autorizar cada celular, la lista de celulares con **Quitar**, **Cambiar PIN** y **Desactivar**. Viene apagado y no cuenta para que la configuración esté completa. Necesita la carpeta de datos elegida al abrir Academic Manager. Ver [42-acceso-celular.md](42-acceso-celular.md).
 
+### Claude Desktop (opcional)
+
+Debajo, **Claude Desktop** (`/claude`) muestra si Claude Desktop está instalado y conectado con Academic Manager, y ofrece **Conectar con Claude Desktop**, **Actualizar conexión** o **Quitar conexión**: agrega o quita solo la entrada `academic-manager` de la configuración de Claude Desktop, con una copia de seguridad antes de cada cambio. Si algo falla, explica cómo hacerlo a mano. Incluye también las **instrucciones para Claude**, listas para copiar. No cuenta para que la configuración esté completa y necesita la carpeta de datos. Ver [43-conector-claude.md](43-conector-claude.md).
+
 En el resumen aparece también la versión instalada (`academic_app/VERSION`).
 
 Los mensajes de error de los módulos técnicos se muestran en lenguaje sencillo; de un error del sistema solo queda como «Detalle técnico» el tipo de error, nunca rutas internas ni datos.

@@ -60,7 +60,7 @@ Invoke-Checked $py @("-m", "pip", "install", "--disable-pip-version-check", "--n
 
 # 3. Código de Academic Manager (sin pruebas, odd, docs ni .git) y comprobación de que arranca.
 Invoke-Checked $py @($stagePy, "app", $repo, (Join-Path $stage "app"))
-Invoke-Checked $py @("-c", "import academic_app, academic_setup, canvas_sync, capture, googleapiclient, google_auth_oauthlib, pypdf, yt_dlp")
+Invoke-Checked $py @("-c", "import academic_app, academic_mcp, academic_mcp.server, academic_setup, canvas_sync, capture, googleapiclient, google_auth_oauthlib, mcp, pypdf, yt_dlp")
 # Sin tzdata el Python portátil no tiene zonas horarias y fallan today y canvas_sync al importarse.
 Invoke-Checked $py @("-c", "from zoneinfo import ZoneInfo; ZoneInfo('America/Bogota')")
 Invoke-Checked $py @("-m", "academic_app", "--help")

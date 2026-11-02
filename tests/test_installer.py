@@ -135,7 +135,7 @@ class RequirementsTests(unittest.TestCase):
         self.assertNotIn("whisperx", names)
         self.assertNotIn("torch", names)
         self.assertEqual(set(names), {"pypdf", "yt-dlp", "google-api-python-client", "google-auth",
-                                      "google-auth-oauthlib", "tzdata", "segno"})
+                                      "google-auth-oauthlib", "tzdata", "segno", "mcp"})
 
     def test_build_checks_the_local_time_zone_loads(self):
         # El Python portátil de Windows no trae zonas horarias: sin tzdata, today y canvas_sync fallan.
@@ -260,7 +260,7 @@ class StageTests(unittest.TestCase):
         result = self.stage("app", ROOT, out)
         self.assertEqual(result.returncode, 0, result.stderr)
         top = sorted(p.name for p in out.iterdir())
-        self.assertEqual(top, ["academic_access", "academic_app", "academic_config", "academic_knowledge",
+        self.assertEqual(top, ["academic_access", "academic_app", "academic_config", "academic_knowledge", "academic_mcp",
                                "academic_operations", "academic_projects", "academic_setup", "academic_store",
                                "canvas_sync", "capture", "scripts"])
         self.assertEqual(sorted(p.name for p in (out / "scripts").iterdir()),

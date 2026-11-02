@@ -1,0 +1,333 @@
+"""Read tools of the Claude Desktop connector, independent of the MCP SDK (docs/43).
+
+Each tool is a thin adapter over the existing read contract (`academic_access`, docs/27, 34, 35,
+36) and the Canvas extras of the panel. Arguments are checked against the tool's JSON schema
+before any reader runs; every failure becomes a `ToolError` with a plain Spanish message for the
+person. Reader exception texts are never shown and the log only records the exception type.
+"""
+import math
+import re
+import sys
+from dataclasses import dataclass
+from datetime import date
+from pathlib import Path
+from typing import Callable
+
+from academic_access import anomalies, brief, core, summary, today
+from academic_access.canvas import canvas_extras
+from academic_config import paths
+from canvas_sync.common import StoreBusy, SyncError
+
+CAP = 20  # Longest list `ponerme_al_dia` returns; the paged tools show the rest.
+
+# Messages for the person; wording follows the panel (academic_app/panel.py).
+CONFIG_STEP = "Abra Academic Manager → «Configuración» y revise el paso «Materias»."
+NO_DATA = ("Todavía no se pueden leer sus materias: la base de datos de este PC no está lista o no "
+           "coincide con la publicada en Drive. " + CONFIG_STEP)
+BUSY = ("La base de datos se está actualizando en este momento (por ejemplo, con la sincronización de "
+        "Canvas). Espere un momento y vuelva a intentarlo.")
+NO_SEMESTER = ("Su base de datos no tiene un semestre activo con materias. Abra Academic Manager → "
+               "«Configuración» → «Materias» y elija las materias de este semestre.")
+STALE = ("El índice de búsqueda de este PC está desactualizado. Actualícelo en Academic Manager → "
+         "«Configuración» → «Materias» y vuelva a intentarlo.")
+NO_FILE = ("No se pudo leer un archivo de sus datos. Revise que la carpeta de datos exista y que Google "
+           "Drive esté abierto, y vuelva a intentarlo.")
+BROKEN = "Los datos de sus materias no se pudieron leer. " + CONFIG_STEP + " Si sigue igual, pida ayuda."
+CONFIG = ("El archivo de configuración de Academic Manager no es válido. Abra Academic Manager → "
+          "«Configuración» para corregirlo.")
+NO_CANVAS = ("Los datos de Canvas de este PC no se pudieron leer; se muestra lo demás. Pruebe "
+             "«Sincronizar ahora» en el panel de Academic Manager.")
+# Access errors whose own message is already plain, fixed text (no paths or values).
+PLAIN_CODES = ("INVALID_ARGUMENT", "NOT_FOUND", "NO_TEXT", "SOURCE_CHANGED")
+
+
+class ToolError(Exception):
+    """A tool failed; the message is plain Spanish, safe to show to the person."""
+
+
+@dataclass(frozen=True)
+class Tool:
+    name: str
+    title: str
+    description: str
+    schema: dict
+    handler: Callable
+    read_only: bool = True
+
+
+# --- argument schemas ------------------------------------------------------------------
+SUBJECT_PATTERN = r"^MAT-[A-Za-z0-9_-]{1,40}$"
+
+
+def _subject(text="Identificador exacto de la materia (MAT-…), como lo devuelve «materias»."):
+    return {"type": "string", "pattern": SUBJECT_PATTERN, "description": text}
+
+
+def _integer(low, high, text):
+    return {"type": "integer", "minimum": low, "maximum": high, "description": text}
+
+
+def _text(high, text):
+    return {"type": "string", "minLength": 1, "maxLength": high, "description": text}
+
+
+LIMIT = _integer(1, core.MAX_ITEMS, f"Cuántos elementos devolver (1 a {core.MAX_ITEMS}; por defecto 50).")
+OFFSET = _integer(0, 1_000_000, "Cuántos elementos saltar para ver la página siguiente (por defecto 0).")
+
+
+def _schema(properties=None, required=()):
+    return {"type": "object", "properties": properties or {}, "required": list(required),
+            "additionalProperties": False}
+
+
+def _check(schema, arguments):
+    """Validated arguments without the null ones, or a plain `ToolError`."""
+    if arguments is None:
+        arguments = {}
+    if not isinstance(arguments, dict):
+        raise ToolError("Los parámetros deben ser un objeto JSON.")
+    rules = schema["properties"]
+    unknown = sorted(set(arguments) - set(rules))
+    if unknown:
+        raise ToolError(f"Parámetro no reconocido: {', '.join(unknown)[:80]}.")
+    for name in schema["required"]:
+        if arguments.get(name) is None:
+            raise ToolError(f"Falta el parámetro «{name}».")
+    values = {k: v for k, v in arguments.items() if v is not None}
+    for name, value in values.items():
+        rule = rules[name]
+        if rule["type"] == "integer":
+            if type(value) is not int or not rule["minimum"] <= value <= rule["maximum"]:
+                raise ToolError(f"«{name}» debe ser un número entero entre {rule['minimum']} "
+                                f"y {rule['maximum']}.")
+        elif not isinstance(value, str):
+            raise ToolError(f"«{name}» debe ser texto.")
+        elif "enum" in rule and value not in rule["enum"]:
+            raise ToolError(f"«{name}» debe ser uno de: {', '.join(rule['enum'])}.")
+        elif "pattern" in rule and not _matches(rule["pattern"], value):
+            raise ToolError(f"«{name}» debe ser un identificador de materia como MAT-ABC; "
+                            "use la herramienta «materias» para verlos.")
+        elif not rule.get("minLength", 0) <= len(value) <= rule.get("maxLength", 10_000):
+            raise ToolError(f"«{name}» debe tener entre {rule.get('minLength', 0)} y "
+                            f"{rule.get('maxLength')} caracteres.")
+    return values
+
+
+def _matches(pattern, value):
+    return re.fullmatch(pattern, value) is not None
+
+
+# --- error mapping ---------------------------------------------------------------------
+def plain_message(exc):
+    """Message for the person by failure type; the exception text itself is never used."""
+    if isinstance(exc, ToolError):
+        return str(exc)
+    if isinstance(exc, core.AccessError):
+        if exc.code == "INDEX_STALE":
+            return STALE
+        if exc.code == "SOURCE_UNAVAILABLE":
+            return NO_DATA
+        if exc.code == "INVALID_SOURCE" and "semestre activo" in str(exc):
+            return NO_SEMESTER
+        return str(exc) if exc.code in PLAIN_CODES else BROKEN
+    if isinstance(exc, paths.ConfigError):
+        return CONFIG
+    if isinstance(exc, StoreBusy):
+        return BUSY
+    if isinstance(exc, SyncError):
+        return NO_DATA
+    if isinstance(exc, OSError):
+        return NO_FILE
+    if isinstance(exc, StopIteration) or (type(exc) is ValueError and "semestre activo" in str(exc)):
+        return NO_SEMESTER
+    return BROKEN  # StoreError, ValueError, KeyError, sqlite3.Error and any other unreadable data
+
+
+def _log(name, exc):
+    print(f"academic_mcp: {name} no se pudo leer ({type(exc).__name__}).", file=sys.stderr, flush=True)
+
+
+def resolve_runtime(explicit=None):
+    """Data folder like every other module: --runtime > ACADEMIC_MANAGER_DATA > config > default."""
+    try:
+        value = paths.runtime(explicit, env=("ACADEMIC_MANAGER_DATA",), default=paths.DEFAULT_RUNTIME)
+    except paths.ConfigError:
+        raise ToolError(CONFIG) from None
+    return Path(value).resolve()
+
+
+def _jsonable(value):
+    if isinstance(value, dict):
+        return {str(k): _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(v) for v in value]
+    if isinstance(value, date):  # datetime included
+        return value.isoformat()
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if value is None or isinstance(value, (str, int, float)):
+        return value
+    return str(value)
+
+
+# --- handlers ----------------------------------------------------------------------------
+def _page(args):
+    return {"limit": args.get("limite", 50), "offset": args.get("offset", 0)}
+
+
+def _capped(rows):
+    rows = list(rows or [])
+    return {"total": len(rows), "items": rows[:CAP]}
+
+
+def _canvas(runtime, warnings):
+    """Canvas copies are optional for the overview: unreadable ones become a warning."""
+    try:
+        return canvas_extras(runtime)
+    except Exception as exc:  # noqa: BLE001 - any failure only hides the Canvas part
+        _log("canvas", exc)
+        warnings.append(NO_CANVAS)
+        return None
+
+
+def _catch_up(runtime, args):
+    subject = args.get("materia")
+    if subject:
+        return _catch_up_subject(runtime, subject)
+    day = today.today(runtime)
+    overview = summary.summary(runtime)
+    warnings = list(overview.get("avisos") or [])
+    extras = _canvas(runtime, warnings)
+    return {"fecha": day["fecha"], "dias": day["dias"],
+            "hoy": {"resumen": day["resumen"], **_capped(day["items"])},
+            "semestre": overview.get("semestre"), "materias": overview.get("materias"),
+            "reciente": {k: list(v)[:CAP] for k, v in (overview.get("reciente") or {}).items()},
+            "canvas": None if extras is None else {
+                "actualizado": extras["actualizado"], "notas_nuevas": _capped(extras["notas_nuevas"])},
+            "avisos": warnings,
+            "nota": f"Las listas muestran como máximo {CAP} elementos; «total» dice cuántos hay."}
+
+
+def _catch_up_subject(runtime, subject):
+    data = brief.subject_brief(runtime, subject)
+    recent = core.notes(runtime, subject=subject, limit=CAP)["resultado"]
+    warnings = []
+    extras = _canvas(runtime, warnings)
+    canvas = None
+    if extras is not None and subject in extras["materias"]:
+        row = extras["materias"][subject]
+        canvas = {"actualizado": extras["actualizado"], "nota": row["nota"], "sin_leer": row["sin_leer"],
+                  "retroalimentacion": _capped(row["retroalimentacion"]),
+                  "notas_nuevas": _capped([r for r in extras["notas_nuevas"] if r["materia_id"] == subject])}
+    return {"fecha": data["fecha"], "materia": data["materia"],
+            "pendientes": {"resumen": data["pendientes"]["resumen"], **_capped(data["pendientes"]["items"])},
+            "entregas": _capped(data["entregas"]), "tareas": _capped(data["tareas"]),
+            "decisiones": _capped(data["decisiones"]), "resumenes_clase": _capped(data["resumenes_clase"]),
+            "notas_recientes": {"total": recent["total"], "items": recent["items"]},
+            "canvas": canvas, "avisos": warnings,
+            "nota": f"Las listas muestran como máximo {CAP} elementos; «total» dice cuántos hay."}
+
+
+_TOOLS = [
+    Tool("ponerme_al_dia", "Ponerme al día",
+         "Llámela al empezar cada conversación, antes de responder: da el contexto académico actual. "
+         "Sin «materia»: lo que hay que hacer hoy y en los próximos días, avisos del sistema, materias "
+         "del semestre, notas y tareas recientes y notas nuevas de Canvas. Con «materia»: pendientes, "
+         "entregas, tareas, decisiones, resúmenes de clase y notas recientes de esa materia, más su "
+         "nota actual, mensajes sin leer y comentarios del profesor en Canvas. Las listas vienen "
+         f"recortadas a {CAP} elementos; use las demás herramientas para ver más.",
+         _schema({"materia": _subject("Materia (MAT-…) si la conversación es de una sola materia.")}),
+         _catch_up),
+    Tool("hoy", "Qué hacer hoy",
+         "Lista priorizada de lo que hay que hacer: actividades vencidas y próximas, tareas personales, "
+         "clases sin procesar y materias sin movimiento, del semestre activo. Fechas en hora de Colombia.",
+         _schema({"dias": _integer(1, today.MAX_DAYS, f"Horizonte en días (1 a {today.MAX_DAYS}; por "
+                                                       f"defecto {today.DEFAULT_DAYS}).")}),
+         lambda runtime, a: today.today(runtime, days=a.get("dias", today.DEFAULT_DAYS))),
+    Tool("resumen", "Resumen del semestre",
+         "Resumen general: avisos del sistema (Canvas Sync, índice, token), semestre activo, materias "
+         "con su última clase, lo urgente, notas y tareas recientes y el estado de los datos.",
+         _schema(), lambda runtime, a: summary.summary(runtime)),
+    Tool("materias", "Materias",
+         "Materias del semestre activo con su identificador MAT-…, nombre y bloque. Úsela para saber qué "
+         "identificador pasar a las demás herramientas.",
+         _schema(), lambda runtime, a: core.subjects(runtime)),
+    Tool("materia", "Detalle de una materia",
+         "Datos de una materia y la cobertura de su material de estudio (qué fuentes tienen texto "
+         "disponible para buscar y citar).",
+         _schema({"materia": _subject()}, ["materia"]),
+         lambda runtime, a: core.subject_detail(runtime, a["materia"])),
+    Tool("actividades", "Actividades de una materia",
+         "Actividades de Canvas de una materia (fechas de apertura, entrega y cierre, puntos, estado), "
+         "paginadas.",
+         _schema({"materia": _subject(), "limite": LIMIT, "offset": OFFSET}, ["materia"]),
+         lambda runtime, a: core.activities(runtime, subject=a["materia"], **_page(a))),
+    Tool("clases", "Clases de una materia",
+         "Clases registradas de una materia (fecha, título, tema principal, estado de procesamiento), "
+         "paginadas.",
+         _schema({"materia": _subject(), "limite": LIMIT, "offset": OFFSET}, ["materia"]),
+         lambda runtime, a: core.classes(runtime, subject=a["materia"], **_page(a))),
+    Tool("notas", "Notas guardadas",
+         "Notas guardadas por la persona (decisiones, resúmenes de clase, notas), de la más reciente a la "
+         "más antigua, paginadas. Opcionalmente de una materia o de un tipo.",
+         _schema({"materia": _subject(), "tipo": {"type": "string", "enum": list(core.NOTE_TYPES),
+                                                  "description": "Tipo de nota."},
+                  "limite": LIMIT, "offset": OFFSET}),
+         lambda runtime, a: core.notes(runtime, subject=a.get("materia"), kind=a.get("tipo"), **_page(a))),
+    Tool("tareas", "Tareas personales",
+         "Tareas personales de la persona, por fecha límite, paginadas. Opcionalmente por estado o "
+         "materia.",
+         _schema({"estado": {"type": "string", "enum": list(core.TASK_STATES),
+                             "description": "Estado de la tarea."},
+                  "materia": _subject(), "limite": LIMIT, "offset": OFFSET}),
+         lambda runtime, a: core.tasks(runtime, subject=a.get("materia"), state=a.get("estado"),
+                                       **_page(a))),
+    Tool("buscar", "Buscar en el material",
+         "Busca palabras en el material de estudio autorizado de una materia y devuelve las fuentes y "
+         "fragmentos que coinciden. Para citar o leer más, use «leer_fuente» con el «fuente_id».",
+         _schema({"consulta": _text(200, "Palabras a buscar."), "materia": _subject(),
+                  "limite": _integer(1, 30, "Cuántos resultados (1 a 30; por defecto 8).")},
+                 ["consulta", "materia"]),
+         lambda runtime, a: core.search(runtime, a["consulta"], subject=a["materia"],
+                                        limit=a.get("limite", 8))),
+    Tool("leer_fuente", "Leer una fuente",
+         "Lee un fragmento del texto de una fuente de estudio (por su «fuente_id» de «buscar»). Úsela "
+         "para citar el material real en lugar de suponer su contenido; «hay_mas» indica si sigue.",
+         _schema({"fuente": _text(200, "Identificador de la fuente («fuente_id»)."),
+                  "materia": _subject("Materia a la que debe pertenecer la fuente (opcional)."),
+                  "offset": _integer(0, 100_000_000, "Carácter desde el que leer (por defecto 0)."),
+                  "length": _integer(1, core.MAX_EXCERPT, f"Cuántos caracteres leer (1 a "
+                                                          f"{core.MAX_EXCERPT}; por defecto 3000).")},
+                 ["fuente"]),
+         lambda runtime, a: _without_local_path(core.source(runtime, a["fuente"], subject=a.get("materia"),
+                                                            offset=a.get("offset", 0),
+                                                            length=a.get("length", 3000)))),
+    Tool("anomalias", "Anomalías de los datos",
+         "Problemas detectados en los datos del semestre activo (archivos duplicados, textos de prueba, "
+         "actividades sin fecha). Opcionalmente de una materia.",
+         _schema({"materia": _subject()}),
+         lambda runtime, a: anomalies.anomalies(runtime, subject=a.get("materia"))),
+]
+
+def _without_local_path(found):
+    """Claude cites by «fuente_id»; the text file's absolute path on this PC is not needed."""
+    if isinstance(found, dict):
+        found = {k: v for k, v in found.items() if k != "ruta_texto"}
+    return found
+
+
+TOOLS = {tool.name: tool for tool in _TOOLS}
+
+
+def call(name, arguments, runtime):
+    """Runs one tool: JSON-serializable result, or `ToolError` with a plain message."""
+    tool = TOOLS.get(name)
+    if tool is None:
+        raise ToolError("Esa herramienta no existe en Academic Manager.")
+    args = _check(tool.schema, arguments)
+    try:
+        result = tool.handler(Path(runtime), args)
+    except Exception as exc:  # noqa: BLE001 - nothing internal may reach the person
+        _log(name, exc)
+        raise ToolError(plain_message(exc)) from None
+    return _jsonable(result)

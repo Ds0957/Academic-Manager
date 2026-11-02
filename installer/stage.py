@@ -14,7 +14,7 @@ from pathlib import Path
 
 # Paquetes que la app instalada importa; lo demás (tests, odd, docs, .git, scripts .cmd de la
 # instalación de desarrollo, requisitos) no viaja en el instalador.
-PACKAGES = ("academic_access", "academic_app", "academic_config", "academic_knowledge", "academic_operations",
+PACKAGES = ("academic_access", "academic_app", "academic_config", "academic_knowledge", "academic_mcp", "academic_operations",
             "academic_projects", "academic_setup", "academic_store", "canvas_sync", "capture")
 SCRIPTS = ("canvas-daily.ps1", "install-canvas-daily-task.ps1")
 # Rutas relativas a la carpeta del ._pth: su zip de biblioteca estándar, su carpeta, los paquetes

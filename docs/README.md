@@ -45,6 +45,18 @@ Se utilizan tres niveles:
 29. [Etapa 3: preparación de ChatGPT Projects y flujo de GitHub Issues](29-preparacion-chatgpt-projects.md)
 30. [Capture: progreso de transcripción y consulta de trabajos](30-capture-monitoreo-progreso.md)
 31. [Operaciones controladas del Coordinador](31-operaciones-coordinador.md)
+32. [Almacén SQLite (fuente de verdad)](32-almacen-sqlite.md)
+33. [Escritura desde el chat](33-escritura-desde-chat.md)
+34. [`today`: qué hacer primero](34-today.md)
+35. [`summary`: resumen funcional para empezar un chat](35-summary.md)
+36. [`anomalies`: inconsistencias de datos](36-anomalias.md)
+37. [Comprobación del equipo para Capture](37-comprobacion-equipo.md)
+38. [Asistente de configuración](38-asistente-configuracion.md)
+39. [Instalador de Windows](39-instalador-windows.md)
+40. [Repositorio público y exportación limpia](40-repo-publico.md)
+41. [Panel del día a día](41-panel.md)
+42. [Acceso desde el celular](42-acceso-celular.md)
+43. [Conector de Claude Desktop](43-conector-claude.md)
 
 ## Principio central
 
