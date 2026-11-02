@@ -202,6 +202,7 @@ class Wizard:
         self._update = None  # release más nueva conocida en esta apertura (o None)
         self._landing = None  # «/panel» si el enlace de esta apertura debe llevar al panel
         self.update_thread = None
+        self._request = threading.local()  # .phone: this request came from the phone listener
         # Las publicaciones del panel leen la dependencia al correr: las pruebas pueden sustituirla.
         self.publisher = registrar.Publisher(lambda *a, **kw: self.deps["write_apply"](*a, **kw))
 
@@ -225,6 +226,8 @@ class Wizard:
 
     def _update_card(self, csrf):
         from . import version
+        if self._on_phone():
+            return ""  # updating is done on the PC
         with self._lock:
             release = self._update
         if release is None:
@@ -395,7 +398,18 @@ class Wizard:
         return "hecho", f"{_count(len(current), 'materia', 'materias')} en el semestre {registry['active_semester']}."
 
     # --- despacho -----------------------------------------------------------------------
-    def handle(self, method, path, form, files, csrf):
+    def handle(self, method, path, form, files, csrf, *, phone=False):
+        """phone=True: request from the phone listener (phone.py), shown without PC-only parts."""
+        self._request.phone = phone
+        try:
+            return self._dispatch(method, path, form, files, csrf)
+        finally:
+            self._request.phone = False
+
+    def _on_phone(self):
+        return getattr(self._request, "phone", False)
+
+    def _dispatch(self, method, path, form, files, csrf):
         routes = {("GET", "/"): self.entry, ("POST", "/cerrar"): self.close,
                   ("GET", "/panel"): self.panel_today, ("GET", "/panel/resumen"): self.panel_summary,
                   ("GET", "/panel/materias"): self.panel_subjects,
@@ -420,7 +434,11 @@ class Wizard:
                   ("POST", "/paso/materias/pendiente"): self.pending_courses,
                   ("POST", "/paso/materias/publicar"): self.publish_courses,
                   ("POST", "/paso/materias/indice"): self.retry_index,
-                  ("GET", "/paso/tarea"): self.page_task, ("POST", "/paso/tarea"): self.save_task}
+                  ("GET", "/paso/tarea"): self.page_task, ("POST", "/paso/tarea"): self.save_task,
+                  ("GET", "/celular"): self.page_phone, ("POST", "/celular/activar"): self.phone_enable,
+                  ("POST", "/celular/iniciar"): self.phone_start, ("POST", "/celular/qr"): self.phone_qr,
+                  ("POST", "/celular/quitar"): self.phone_revoke, ("POST", "/celular/pin"): self.phone_pin,
+                  ("POST", "/celular/desactivar"): self.phone_disable}
         action = routes.get((method, path))
         if action is None and method == "GET" and path.startswith(SUBJECT_PAGE):
             action = functools.partial(self.panel_subject, subject=path[len(SUBJECT_PAGE):])
@@ -489,7 +507,7 @@ class Wizard:
         body = (self._update_card(csrf) + (notice(error, bad=True) if error else "") + ready
                 + '<p>Este asistente prepara Academic Manager en este PC paso a paso. Puede cerrarlo '
                 'cuando quiera: lo que ya hizo queda guardado y al volver verá en qué paso va.</p>'
-                + self._take_flash() + "".join(rows)
+                + self._take_flash() + "".join(rows) + self._phone_row()
                 + f'<form method="post" action="/cerrar">{csrf_field(csrf)}'
                   '<button class="secondary">Cerrar el asistente</button></form>'
                 + _version_line())
@@ -1120,8 +1138,8 @@ class Wizard:
 
     # --- panel del día a día (solo lectura) -------------------------------------------
     def _panel(self, key, title, body, csrf, status=200, **head):
-        return Response(status, layout(title, self._update_card(csrf) + body, back=False, nav=panel.nav(key),
-                                       wide=True, **head))
+        return Response(status, layout(title, self._update_card(csrf) + body, back=False,
+                                       nav=panel.nav(key, phone=self._on_phone()), wide=True, **head))
 
     def _panel_runtime(self):
         try:
@@ -1130,9 +1148,11 @@ class Wizard:
             return None
 
     def _panel_setup(self, key, title, csrf):
-        body = (notice(panel.NEED_SETUP, bad=True)
-                + '<p><a href="/">Ir a «Configuración»</a></p>')
-        return self._panel(key, title, body, csrf)
+        link = "" if self._on_phone() else '<p><a href="/">Ir a «Configuración»</a></p>'
+        return self._panel(key, title, notice(panel.NEED_SETUP, bad=True) + link, csrf)
+
+    def _problem_card(self, reading, csrf=None):
+        return panel.problem_card(reading, csrf, phone=self._on_phone())
 
     def _read(self, dep, *args):
         return panel.read(self.deps[dep], *args)
@@ -1165,7 +1185,7 @@ class Wizard:
             body += self._sync_card(runtime, csrf, summary.value.get("sistema"), compact=True)
         subtitle = ""
         if today.problem:
-            body += panel.problem_card(today)
+            body += self._problem_card(today)
         else:
             day = today.value["fecha"]
             subtitle = (panel.day_text(day) or "").capitalize()
@@ -1194,7 +1214,7 @@ class Wizard:
             return self._panel_setup("resumen", "Resumen", csrf)
         summary = self._read("panel_summary", runtime)
         if summary.problem:
-            return self._panel("resumen", "Resumen", panel.problem_card(summary), csrf)
+            return self._panel("resumen", "Resumen", self._problem_card(summary), csrf)
         data = summary.value
         day = data["fecha"]
         names, tones = panel.names_of(data), panel.tones_of(data)
@@ -1245,7 +1265,7 @@ class Wizard:
             return self._panel_setup("materias", "Materias", csrf)
         summary = self._read("panel_summary", runtime)
         if summary.problem:
-            return self._panel("materias", "Materias", panel.problem_card(summary), csrf)
+            return self._panel("materias", "Materias", self._problem_card(summary), csrf)
         data = summary.value
         names, tones = panel.names_of(data), panel.tones_of(data)
         today = self._read("panel_today", runtime)  # solo para contar pendientes; si falla, no se cuentan
@@ -1277,7 +1297,7 @@ class Wizard:
             return self._panel_setup("materias", "Materia", csrf)
         summary = self._read("panel_summary", runtime)
         if summary.problem:
-            return self._panel("materias", "Materia", panel.problem_card(summary), csrf)
+            return self._panel("materias", "Materia", self._problem_card(summary), csrf)
         names, tones = panel.names_of(summary.value), panel.tones_of(summary.value)
         if subject not in names:  # solo materias del semestre activo; nada de la ruta llega a la página
             body = notice("Esa materia no está en el semestre activo.", bad=True) + \
@@ -1286,7 +1306,7 @@ class Wizard:
         title = names[subject]
         brief = self._read("panel_brief", runtime, subject)
         if brief.problem:
-            return self._panel("materias", title, panel.problem_card(brief), csrf)
+            return self._panel("materias", title, self._problem_card(brief), csrf)
         data = brief.value
         day = data["fecha"]
         pending = data["pendientes"]["items"]
@@ -1360,7 +1380,7 @@ class Wizard:
             return self._panel_setup("instrucciones", title, csrf)
         files = self._read("panel_instructions", runtime)
         if files.problem:
-            return self._panel("instrucciones", title, panel.problem_card(files, csrf), csrf)
+            return self._panel("instrucciones", title, self._problem_card(files, csrf), csrf)
         summary = self._read("panel_summary", runtime).value
         names, tones = panel.names_of(summary), panel.tones_of(summary)
         boxes = []
@@ -1389,7 +1409,9 @@ class Wizard:
             return False
 
     def _sync_card(self, runtime, csrf, system, *, compact=False):
-        """Última sincronización y el botón «Sincronizar ahora» (o el enlace al progreso)."""
+        """Última sincronización y el botón «Sincronizar ahora» (o el enlace al progreso); no en el celular."""
+        if self._on_phone():
+            return ""
         last = (system or {}).get("ultimo_canvas_sync") or {}
         state = {"ok": " ok", "error": " bad"}.get(last.get("status"), "")
         if self._sync_running(runtime):
@@ -1441,7 +1463,7 @@ class Wizard:
     # --- registrar desde el panel (mismo contrato que el chat) -------------------------------
     def _register_page(self, title, body, csrf, status=200, head=""):
         return Response(status, layout(title, self._update_card(csrf) + body, back=False,
-                                       nav=panel.nav(None), head=head))
+                                       nav=panel.nav(None, phone=self._on_phone()), head=head))
 
     def _register_problem(self, text, back, csrf, status=400):
         body = (notice(text, bad=True)
@@ -1524,6 +1546,171 @@ class Wizard:
                     + "".join(f"<p>{esc(n)}</p>" for n in current.notes) + "</div>" + details + back)
             return self._register_page("Listo", body, csrf)
         return self._register_page("No se pudo publicar", notice(current.message, bad=True) + details + back, csrf)
+
+    # --- acceso desde el celular (opcional; docs/42-acceso-celular.md) ---------------------
+    def data_folder(self):
+        """Carpeta de datos lista, o None (entonces no hay acceso desde el celular en esta apertura)."""
+        return self._panel_runtime()
+
+    def _phone(self):
+        return self.deps.get("phone")  # PhoneController, puesto por __main__ si hay carpeta de datos
+
+    def _phone_row(self):
+        controller = self._phone()
+        state = ("Activado" if controller.access.is_active() else "Apagado") if controller else "Apagado"
+        return ('<div class="card step"><div><strong>Acceso desde el celular</strong> '
+                f'<span class="muted">(opcional) · {esc(state)}</span><br><span class="muted">Ver el panel y '
+                'registrar desde el celular, en el mismo Wi-Fi que este PC.</span></div>'
+                '<a href="/celular">Abrir</a></div>')
+
+    def _phone_layout(self, body, csrf, error=None, status=200):
+        head = self._take_flash() + (notice(error, bad=True) if error else "")
+        return Response(status, layout("Acceso desde el celular", head + body))
+
+    def page_phone(self, csrf, error=None, status=200, **_):
+        controller = self._phone()
+        if controller is None:
+            return self._phone_layout(notice(PHONE_NO_DATA, bad=True), csrf, error, status)
+        if not controller.access.is_active():
+            body = (f'<div class="card">{PHONE_INTRO}'
+                    f'<form method="post" action="/celular/activar">{csrf_field(csrf)}{_pin_fields()}'
+                    '<button>Activar</button></form></div>' + PHONE_SAFETY)
+            return self._phone_layout(body, csrf, error, status)
+        state = controller.status()
+        if state["escuchando"]:
+            where = (f'<div class="card"><h2>Activado</h2><p>Dirección para el celular: '
+                     f'<strong>{esc(state["direccion"])}</strong></p><p>Para autorizar un celular, muestre el '
+                     'código QR y escanéelo con la cámara del celular; después escriba el PIN en el celular.</p>'
+                     f'<form method="post" action="/celular/qr">{csrf_field(csrf)}'
+                     '<button>Mostrar código QR</button></form></div>')
+        else:
+            problem = state["problema"] or "El acceso desde el celular no está escuchando."
+            where = (f'<div class="card msg bad"><p>{esc(problem)}</p>'
+                     f'<form method="post" action="/celular/iniciar">{csrf_field(csrf)}'
+                     '<button>Volver a intentar</button></form></div>')
+        body = (where + self._phone_devices(controller, csrf)
+                + f'<div class="card"><h2>Cambiar PIN</h2><p>Los celulares tendrán que escribir el PIN nuevo.</p>'
+                  f'<form method="post" action="/celular/pin">{csrf_field(csrf)}{_pin_fields()}'
+                  '<button>Cambiar PIN</button></form></div>'
+                + f'<div class="card"><h2>Desactivar</h2><p>El PC deja de escuchar la red y ningún celular '
+                  'puede entrar. Los celulares autorizados se conservan para cuando lo vuelva a activar.</p>'
+                  f'<form method="post" action="/celular/desactivar">{csrf_field(csrf)}'
+                  '<button class="secondary">Desactivar</button></form></div>' + PHONE_SAFETY)
+        return self._phone_layout(body, csrf, error, status)
+
+    @staticmethod
+    def _phone_devices(controller, csrf):
+        rows = "".join(
+            f'<li><div class="grow">{esc(d["nombre"])}<small>autorizado el {esc(_moment_text(d["creado"]))} · '
+            f'visto por última vez el {esc(_moment_text(d["visto"]))}</small></div>'
+            f'<form method="post" action="/celular/quitar" class="inline-form">{csrf_field(csrf)}'
+            f'<input type="hidden" name="dispositivo" value="{esc(d["id"])}">'
+            '<button class="small secondary">Quitar</button></form></li>'
+            for d in controller.access.devices())
+        listing = f'<ul class="rows">{rows}</ul>' if rows else '<p class="muted">Todavía no hay celulares autorizados.</p>'
+        return f'<div class="card"><h2>Celulares autorizados</h2>{listing}</div>'
+
+    def _phone_action(self, csrf, action, message):
+        """Corre action(controller); un PhoneError vuelve a la página con su mensaje sencillo."""
+        from .phone import PhoneError
+        controller = self._phone()
+        if controller is None:
+            return self.page_phone(csrf, status=400)
+        try:
+            problem = action(controller)
+        except PhoneError as exc:
+            return self.page_phone(csrf, error=str(exc), status=400)
+        if problem:
+            return self.page_phone(csrf, error=problem, status=400)
+        return self._done("/celular", message)
+
+    @staticmethod
+    def _new_pin(form):
+        from .phone import PhoneError
+        pin, again = _first(form, "pin"), _first(form, "pin2")
+        if pin != again:
+            raise PhoneError("Los dos PIN no coinciden. Escríbalo otra vez en los dos campos.")
+        return pin
+
+    def phone_enable(self, form, csrf, **_):
+        def enable(controller):
+            controller.access.enable(self._new_pin(form))
+            return controller.start()
+        return self._phone_action(csrf, enable, "Acceso desde el celular activado.")
+
+    def phone_start(self, csrf, **_):
+        return self._phone_action(csrf, lambda c: c.start(), "El acceso desde el celular está escuchando.")
+
+    def phone_pin(self, form, csrf, **_):
+        return self._phone_action(csrf, lambda c: c.access.change_pin(self._new_pin(form)),
+                                  "PIN cambiado. Los celulares deben escribir el PIN nuevo.")
+
+    def phone_revoke(self, form, csrf, **_):
+        return self._phone_action(csrf, lambda c: c.access.revoke(_first(form, "dispositivo")) and None,
+                                  "Se quitó el celular: ya no puede entrar.")
+
+    def phone_disable(self, csrf, **_):
+        def disable(controller):
+            controller.access.disable()
+            controller.stop()
+        return self._phone_action(csrf, disable, "Acceso desde el celular desactivado.")
+
+    def phone_qr(self, csrf, **_):
+        from . import qr
+        from .phone import PhoneError
+        controller = self._phone()
+        if controller is None:
+            return self.page_phone(csrf, status=400)
+        try:
+            url = controller.pairing_url(controller.access.new_pairing())
+        except PhoneError as exc:
+            return self.page_phone(csrf, error=str(exc), status=400)
+        if url is None:
+            return self.page_phone(csrf, error=PHONE_NO_NETWORK, status=400)
+        # El código solo va en esta página (dentro del QR o como texto); el registro guarda la ruta.
+        try:
+            picture = f'<div class="qr">{qr.svg(url)}</div>'
+        except qr.QRUnavailable as exc:
+            picture = (notice(str(exc), bad=True) + '<p>Escriba esta dirección en el navegador del celular:</p>'
+                       f'<pre>{esc(url)}</pre>')
+        body = (f'<div class="card">{picture}<p><strong>Código válido 5 minutos, un solo uso.</strong> '
+                'Escanéelo con la cámara del celular (conectado al mismo Wi-Fi que este PC) y después escriba '
+                'el PIN en el celular. Si vence, vuelva y genere otro.</p>'
+                '<p><a href="/celular">← Volver a «Acceso desde el celular»</a></p></div>')
+        return Response(200, layout("Código QR para el celular", body, back=False))
+
+
+def _pin_fields():
+    return ('<label for="pin">PIN (de 6 a 12 números)</label><input type="password" id="pin" name="pin" '
+            'inputmode="numeric" autocomplete="new-password" maxlength="12" required>'
+            '<label for="pin2">Repita el PIN</label><input type="password" id="pin2" name="pin2" '
+            'inputmode="numeric" autocomplete="new-password" maxlength="12" required>')
+
+
+def _moment_text(stamp):
+    """Marca de tiempo (segundos) → 'lunes 2 de noviembre de 2026 a las 18:05', hora de Colombia."""
+    try:
+        moment = datetime.fromtimestamp(int(stamp), panel.LOCAL_ZONE)
+    except (TypeError, ValueError, OverflowError, OSError):
+        return "fecha desconocida"
+    return f"{panel.day_text(moment.date().isoformat())} a las {moment:%H:%M}"
+
+
+PHONE_NO_DATA = ("El acceso desde el celular necesita la carpeta de datos. " + NEED_DATA
+                 + " Después cierre Academic Manager y vuelva a abrirlo.")
+PHONE_NO_NETWORK = ("El PC no está conectado a una red privada (como el Wi-Fi de casa). "
+                    "Conéctelo y vuelva a intentarlo.")
+PHONE_INTRO = ('<p>Permite abrir el panel (Hoy, Resumen, Materias e Instrucciones) y registrar entregas, notas '
+               'y tareas desde su celular, conectado al <strong>mismo Wi-Fi</strong> que este PC. El PC debe '
+               'estar encendido y con Academic Manager abierto; al cerrarlo, el celular deja de entrar. La '
+               'configuración se cambia solo aquí, en el PC.</p><p>Elija un PIN: el celular lo pedirá para '
+               'entrar. Luego autorice cada celular con un código QR.</p>')
+PHONE_SAFETY = ('<div class="card msg"><h2>Seguridad</h2><p>Dentro del Wi-Fi la conexión no está cifrada '
+                '(es http, no https). Úselo solo en su casa o en redes de su confianza; nunca en un Wi-Fi '
+                'público ni en el de la universidad.</p><p>La primera vez, Windows puede preguntar si permite '
+                'a Python usar la red: permítalo solo en <strong>redes privadas</strong>, nunca en redes '
+                'públicas.</p></div>')
+
 
 def _last_class(value, today):
     """'hace 3 días (miércoles 28 de octubre de 2026)' o 'sin clases'."""

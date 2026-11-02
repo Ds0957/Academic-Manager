@@ -13,6 +13,8 @@ Con el mismo acceso directo **Academic Manager** que el asistente ([38-asistente
 - Si la configuración está **completa**, se abre el panel. Completa quiere decir: los pasos Carpeta de datos, Canvas, Google Drive, Carpeta de Drive y Materias están **Hecho** y la base de datos de este PC coincide con la publicada. Comprobación del equipo y Sincronización diaria no cuentan (solo se conocen al abrirlos).
 - Si no, se abre el asistente como siempre. Su página principal ofrece «Abrir el panel del día a día» en cuanto la configuración queda completa.
 
+También se puede abrir desde el celular en el mismo Wi-Fi, si lo activa en Configuración: ver [42-acceso-celular.md](42-acceso-celular.md).
+
 Arriba de cada página está la barra con el menú **Hoy · Resumen · Materias · Instrucciones · Configuración** en pestañas; Configuración es el asistente (muestra las pestañas cuando la configuración está completa). Cada materia tiene un color y sus iniciales, iguales en todas las páginas (según su orden en el semestre). Las fechas se muestran también en relativo («mañana», «en 3 días», «hace 2 días»). El aviso de versión nueva («Actualizar ahora») también aparece en el panel.
 
 ## Las páginas

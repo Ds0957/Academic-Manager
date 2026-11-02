@@ -93,6 +93,10 @@ Después el paso muestra las materias de Canvas como a cualquier usuario: el pri
 
 Registra la tarea programada de Windows `AcademicManager-CanvasDaily` (08:00 y 18:00, con la sesión del usuario iniciada) para **esta copia** de Academic Manager, con el mismo `scripts\install-canvas-daily-task.ps1` de siempre: el asistente le pasa `-Repo` (la carpeta del código) y `-Python` (el Python con el que corre). La tarea ejecuta `scripts\canvas-daily.ps1` con esos valores, y la carpeta de datos (y la de sus registros, `procesamiento\canvas-sync\logs`) la decide el archivo de configuración a través de `academic_config.paths`. El estado se consulta al abrir el paso, igual que `academic_access system` (fila `tarea_diaria`); el resumen no consulta Windows. Una tarea que no existe (schtasks responde «El sistema no puede encontrar el archivo especificado» / «The system cannot find the file specified») se muestra como **Falta** («Todavía no está activada en este PC»); una tarea desactivada u otro problema se explica sin códigos ni textos de Windows. **Volver a activar** la registra de nuevo (por ejemplo tras cambiar la carpeta del programa). Fuera de Windows dice que solo funciona en Windows.
 
+### Acceso desde el celular (opcional)
+
+Debajo de los pasos, **Acceso desde el celular** (`/celular`) activa el panel desde el celular en el mismo Wi-Fi: PIN, código QR para autorizar cada celular, la lista de celulares con **Quitar**, **Cambiar PIN** y **Desactivar**. Viene apagado y no cuenta para que la configuración esté completa. Necesita la carpeta de datos elegida al abrir Academic Manager. Ver [42-acceso-celular.md](42-acceso-celular.md).
+
 En el resumen aparece también la versión instalada (`academic_app/VERSION`).
 
 Los mensajes de error de los módulos técnicos se muestran en lenguaje sencillo; de un error del sistema solo queda como «Detalle técnico» el tipo de error, nunca rutas internas ni datos.

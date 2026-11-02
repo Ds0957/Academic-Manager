@@ -260,17 +260,29 @@ NAV = (("hoy", "Hoy", "/panel"), ("resumen", "Resumen", "/panel/resumen"),
        ("configuracion", "Configuración", "/"))
 
 
-def nav(current):
+PHONE_TABS = ("hoy", "resumen", "materias", "instrucciones")
+# Desde el celular no hay Configuración: en su lugar, «Salir» (sin CSRF: el escuchador del
+# celular exige Origin y la cookie es SameSite=Strict, ver phone.py).
+PHONE_EXIT = ('<form method="post" action="/salir" class="inline-form">'
+              '<button class="small secondary">Salir</button></form>')
+
+
+def nav(current, phone=False):
     links = []
     for key, title, href in NAV:
+        if phone and key not in PHONE_TABS:
+            continue
         mark = ' aria-current="page"' if key == current else ""
         links.append(f'<a href="{esc(href)}"{mark}>{esc(title)}</a>')
-    return '<nav class="panel-nav">' + "".join(links) + "</nav>"
+    return '<nav class="panel-nav">' + "".join(links) + (PHONE_EXIT if phone else "") + "</nav>"
 
 
-def problem_card(reading, csrf=None):
-    """Aviso de un lector que falló, con el camino a «Configuración»."""
+def problem_card(reading, csrf=None, *, phone=False):
+    """Aviso de un lector que falló, con el camino a «Configuración» (en el celular, solo el texto)."""
     from .pages import csrf_field
+    if phone:
+        return (f'<div class="card msg bad" role="status"><p>{esc(reading.problem)}</p>'
+                '<p>En el PC, abra «Configuración» → «Materias».</p></div>')
     extra = ""
     if reading.stale_index and csrf is not None:
         extra = (f'<form method="post" action="/paso/materias/indice">{csrf_field(csrf)}'

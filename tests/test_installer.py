@@ -135,7 +135,7 @@ class RequirementsTests(unittest.TestCase):
         self.assertNotIn("whisperx", names)
         self.assertNotIn("torch", names)
         self.assertEqual(set(names), {"pypdf", "yt-dlp", "google-api-python-client", "google-auth",
-                                      "google-auth-oauthlib", "tzdata"})
+                                      "google-auth-oauthlib", "tzdata", "segno"})
 
     def test_build_checks_the_local_time_zone_loads(self):
         # El Python portátil de Windows no trae zonas horarias: sin tzdata, today y canvas_sync fallan.

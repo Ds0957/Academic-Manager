@@ -10,3 +10,5 @@ google-auth==2.62.0
 google-auth-oauthlib==1.5.0
 # Windows has no IANA time zone database: zoneinfo needs it for America/Bogota (today, canvas_sync).
 tzdata==2026.5
+# Pairing QR for the phone access (academic_app/qr.py, docs/42): pure Python, drawn locally as SVG.
+segno==1.6.6
