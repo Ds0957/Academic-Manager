@@ -457,8 +457,11 @@ class ListenerTests(ListenerCase):
         conn.request("GET", f"/emparejar?codigo={code}", headers={"Host": f"127.0.0.1:{self.port}"})
         header = conn.getresponse().headers["Set-Cookie"]
         conn.close()
-        for part in ("HttpOnly", "SameSite=Strict", "Path=/", "Max-Age=15552000"):
+        # Lax, not Strict: the pairing link is opened from the camera/QR app (a cross-site
+        # navigation) and Chrome withholds Strict cookies on the redirect to /entrar.
+        for part in ("HttpOnly", "SameSite=Lax", "Path=/", "Max-Age=15552000"):
             self.assertIn(part, header)
+        self.assertNotIn("SameSite=Strict", header)
 
     def test_wrong_pin_shows_form_with_message(self):
         code = self.access.new_pairing()

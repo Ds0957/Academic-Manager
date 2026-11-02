@@ -354,7 +354,10 @@ class PhoneHandler(Handler):
                         token = access.pair(code, device_name(self.headers.get("User-Agent")))
                     except PhoneError as exc:
                         raise Rejected(403, str(exc)) from None
-                    cookie = (f"{DEVICE_COOKIE}={token}; HttpOnly; SameSite=Strict; Path=/; "
+                    # Lax: the QR link opens from the camera app (cross-site), and Chrome would not send a
+                    # Strict cookie on the redirect to /entrar. It only lets the PIN form appear; the
+                    # session cookie stays Strict and every POST still requires a same-site Origin.
+                    cookie = (f"{DEVICE_COOKIE}={token}; HttpOnly; SameSite=Lax; Path=/; "
                               f"Max-Age={DEVICE_MAX_AGE}")
                     response = pages.Response(303, location="/entrar")
                 elif path == "/entrar":
