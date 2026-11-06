@@ -67,7 +67,7 @@ En **Configuración**, debajo de «Acceso desde el celular», la fila **Claude D
 
 Qué hace el botón (`academic_app/claude_desktop.py`):
 
-- Busca el archivo `claude_desktop_config.json` de Claude Desktop. La instalación normal lo guarda en `%APPDATA%\Claude\`; la de **Microsoft Store**, en `%LOCALAPPDATA%\Packages\Claude_…\LocalCache\Roaming\Claude\`. Si existen las dos carpetas, usa la que tiene otros archivos de Claude (en empate, la de Microsoft Store, porque esa carpeta desaparece al desinstalarla). Si no existe ninguna carpeta de Claude, dice «Claude Desktop no está instalado en este PC» y no crea nada.
+- Busca el archivo `claude_desktop_config.json` de Claude Desktop. La instalación normal lo guarda en `%APPDATA%\Claude\`; la de **Microsoft Store**, en `%LOCALAPPDATA%\Claude-Data\claude_…\` (las versiones anteriores usaban `%LOCALAPPDATA%\Packages\Claude_…\LocalCache\Roaming\Claude\`). La carpeta `Claude-Data` siempre tiene prioridad. Si existen las dos carpetas, usa la que tiene otros archivos de Claude (en empate, la de Microsoft Store, porque esa carpeta desaparece al desinstalarla). Si no existe ninguna carpeta de Claude, dice «Claude Desktop no está instalado en este PC» y no crea nada.
 - Agrega o reemplaza **solo** la entrada `mcpServers["academic-manager"]`:
 
   ```json
@@ -97,7 +97,7 @@ Si el botón no puede, la página muestra dónde está el archivo y el texto exa
 
 ## Instrucciones para Claude
 
-La misma página trae un cuadro **Instrucciones para Claude** para pegar en las instrucciones de un proyecto de Claude (o al empezar una conversación):
+La misma página trae la tarjeta **Proyectos de Claude**: un cuadro para el Coordinador y uno por cada materia del semestre activo, para pegar en las instrucciones de su proyecto (engranaje → Memory → Project instructions). Cada proyecto tiene su propia memoria, así que las materias no se mezclan. Son independientes de los Projects de ChatGPT: los dos consultan los mismos datos, pero Claude usa el conector y ChatGPT la línea de comandos. Todos los cuadros comparten estas reglas y terminan con una línea que fija su alcance:
 
 1. Al empezar cada conversación, llamar primero a `ponerme_al_dia` (con la materia, si se va a hablar de una).
 2. Para el material de una materia, usar `buscar` y después `leer_fuente`, y citar la fuente de cada dato; si no se encuentra, decirlo.

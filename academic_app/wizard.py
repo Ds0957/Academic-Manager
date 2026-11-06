@@ -1775,11 +1775,17 @@ class Wizard:
         card += "</div>"
         failed = bool(error) or key == claude_desktop.UNREADABLE
         body = (head + CLAUDE_INTRO + card + self._claude_manual(runtime, state["ruta"], failed)
-                + '<div class="card"><h2>Instrucciones para Claude</h2><p>Péguelas en las instrucciones de un '
-                  'proyecto de Claude (o al empezar una conversación) para que Claude use bien el conector.</p>'
-                + panel.copy_box("instrucciones-claude", "Instrucciones para Claude", CLAUDE_INSTRUCTIONS)
-                + "</div>")
+                + self._claude_projects(runtime))
         return Response(status, layout("Claude Desktop", body))
+
+    def _claude_projects(self, runtime):
+        """Un cuadro por proyecto de Claude: el Coordinador y cada materia del semestre activo."""
+        boxes = panel.copy_box("claude-coordinador", "Coordinador", claude_project_text())
+        if runtime is not None:
+            names = panel.names_of(self._read("panel_summary", runtime).value)
+            boxes += "".join(panel.copy_box(f"claude-{ident}", name, claude_project_text(name, ident))
+                             for ident, name in names.items())
+        return f'<div class="card"><h2>Proyectos de Claude</h2><p>{esc(CLAUDE_PROJECTS)}</p>{boxes}</div>'
 
     @staticmethod
     def _claude_manual(runtime, path, failed):
@@ -1789,7 +1795,9 @@ class Wizard:
         steps = ('<p>Abra Claude Desktop y vaya a Configuración → Desarrollador → «Editar configuración», o abra '
                  f'con el Bloc de notas este archivo:</p><pre>{esc(where)}</pre><p>Si el archivo está vacío o no '
                  'existe, pegue todo el texto de abajo. Si ya tiene «mcpServers», agregue solo la parte de '
-                 '«academic-manager» dentro de él, sin borrar los demás conectores. Guarde el archivo, cierre '
+                 '«academic-manager» dentro de él, sin borrar los demás conectores. Si tiene contenido pero '
+                 'está sin «mcpServers», pegue el bloque «mcpServers» justo después de la primera llave { y '
+                 'ponga una coma al final del bloque, sin borrar nada más. Guarde el archivo, cierre '
                  'Claude Desktop por completo (también desde la bandeja del sistema) y vuelva a abrirlo.</p>'
                  + panel.copy_box("claude-manual", "Texto para la configuración de Claude Desktop",
                                   claude_desktop.manual_snippet(runtime)))
@@ -1882,6 +1890,20 @@ CLAUDE_INSTRUCTIONS = (
     "crearlo con guardar_indice_clase a partir de su transcripción y guárdalo solo si lo apruebo.\n"
     "6. Aunque tengas Desktop Commander u otro acceso a los archivos del PC, nunca edites directamente los "
     "datos, la base de datos ni los archivos de Academic Manager.")
+CLAUDE_PROJECTS = ("Cree un proyecto en Claude para el Coordinador y otro por materia: cada proyecto tiene su "
+                   "propia memoria, así que las materias no se mezclan. En cada uno, abra el engranaje → Memory → "
+                   "Project instructions y pegue su cuadro. En un proyecto antiguo, péguelo en sus instrucciones.")
+
+
+def claude_project_text(name=None, ident=None):
+    """Instrucciones de un proyecto de Claude; sin materia, las del Coordinador."""
+    if name is None:
+        scope = ("Este proyecto es el Coordinador: ve todas las materias del semestre. Empieza con "
+                 "ponerme_al_dia y ayúdame a priorizar entre materias.")
+    else:
+        scope = (f"Este proyecto es solo de {name} ({ident}). Usa siempre esa materia con el conector, empieza "
+                 f"con ponerme_al_dia para {ident} y no consultes otras materias salvo que te lo pida.")
+    return f"{CLAUDE_INSTRUCTIONS}\n\n{scope}"
 
 
 def _last_class(value, today):

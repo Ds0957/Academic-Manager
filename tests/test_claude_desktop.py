@@ -50,6 +50,15 @@ class Env:
             (folder / name).write_text("x", encoding="utf-8")
         return folder / cd.CONFIG_NAME
 
+    def data(self, *files):
+        """Carpeta actual de Claude Desktop de Microsoft Store: %LOCALAPPDATA%\\Claude-Data\\claude_<editor>."""
+        folder = self.local / "Claude-Data" / "claude_pzs8sxrjxfjjc"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder.parent / "README.txt").write_text("x", encoding="utf-8")
+        for name in files:
+            (folder / name).write_text("x", encoding="utf-8")
+        return folder / cd.CONFIG_NAME
+
 
 def backups(config):
     return sorted(config.parent.glob(cd.CONFIG_NAME + ".academic-manager-*.bak"))
@@ -60,6 +69,28 @@ class LocateTests(unittest.TestCase):
         self.fake = Env(self)
         self.data = self.fake.root / "datos"
         self.data.mkdir()
+
+    def test_current_data_folder_wins_over_the_folders_claude_left_behind(self):
+        self.fake.store(".user-data-left.claude_pzs8sxrjxfjjc")
+        self.fake.normal("old.log")
+        config = self.fake.data(cd.CONFIG_NAME, "config.json")
+        self.assertEqual(cd.locate(self.fake.env), config)
+
+    def test_current_data_folder_wins_even_before_it_has_the_config_file(self):
+        self.fake.store(".user-data-left.claude_pzs8sxrjxfjjc")
+        config = self.fake.data("config.json")
+        self.assertEqual(cd.locate(self.fake.env), config)
+
+    def test_connect_writes_in_the_current_data_folder_and_keeps_its_settings(self):
+        self.fake.store(".user-data-left.claude_pzs8sxrjxfjjc")
+        config = self.fake.data()
+        config.write_text(json.dumps({"preferences": {"a": 1}}), encoding="utf-8")
+        result = cd.connect("C:\\Datos", env=self.fake.env, now=NOW, executable="C:\\py\\python.exe")
+        self.assertEqual(result["ruta"], config)
+        data = json.loads(config.read_text(encoding="utf-8"))
+        self.assertEqual(data["preferences"], {"a": 1})
+        self.assertIn(cd.SERVER_KEY, data["mcpServers"])
+        self.assertEqual(len(backups(config)), 1)
 
     def test_not_installed_never_creates_claude_folder(self):
         state = cd.status(self.data, env=self.fake.env)
@@ -320,7 +351,7 @@ class ClaudePageTests(PanelCase):
 
     def test_instructions_for_claude_box(self):
         body = self.get("/claude")[2]
-        match = re.search(r'<textarea id="instrucciones-claude"[^>]*>(.*?)</textarea>', body, re.S)
+        match = re.search(r'<textarea id="claude-coordinador"[^>]*>(.*?)</textarea>', body, re.S)
         self.assertIsNotNone(match)
         text = match.group(1)
         for needle in ("ponerme_al_dia", "buscar", "leer_fuente", "Desktop Commander", "nunca"):
@@ -330,6 +361,39 @@ class ClaudePageTests(PanelCase):
         from academic_app import phone
         self.assertNotIn("/claude", phone.ALLOWED_GET)
         self.assertNotIn("/claude/conectar", phone.ALLOWED_POST)
+
+    def test_one_instructions_box_per_claude_project(self):
+        body = self.get("/claude")[2]
+        self.assertIn("Proyectos de Claude", body)
+        self.assertIn("Memory", body)
+        self.assertLess(body.index('id="claude-coordinador"'), body.index('id="claude-MAT-GBD"'))
+        self.assertLess(body.index('id="claude-MAT-GBD"'), body.index('id="claude-MAT-SO2"'))
+        self.assertEqual(body.count('class="copiar"'), 3 + body.count('id="claude-manual"'))
+        self.assertIn("Este proyecto es el Coordinador", body)
+        self.assertIn("Este proyecto es solo de Sistemas operativos II (MAT-SO2)", body)
+        self.assertIn("ponerme_al_dia para MAT-SO2", body)
+        self.assertIn("Gestión de bases &lt;datos&gt; (MAT-GBD)", body)
+        self.assertNotIn("<datos>", body)
+
+    def test_subject_box_keeps_the_shared_rules_and_adds_its_scope(self):
+        from academic_app import wizard
+        text = wizard.claude_project_text("Sistemas operativos II", "MAT-SO2")
+        self.assertTrue(text.startswith(wizard.CLAUDE_INSTRUCTIONS))
+        self.assertIn("no consultes otras materias salvo que te lo pida", text)
+
+    def test_without_subjects_only_the_coordinator_box_is_offered(self):
+        self.summary.side_effect = OSError("sin datos")
+        status, _, body = self.get("/claude")
+        self.assertEqual(status, 200)
+        self.assertIn('id="claude-coordinador"', body)
+        self.assertNotIn('id="claude-MAT-', body)
+        self.assertNotIn("sin datos", body)
+
+    def test_manual_steps_cover_a_file_with_content_but_no_servers(self):
+        self.fake.data("config.json")
+        body = self.get("/claude")[2]
+        self.assertIn("sin «mcpServers»", body)
+        self.assertIn(esc(str(self.fake.data())), body)
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ CONFIG_NAME = "claude_desktop_config.json"
 SERVER_KEY = "academic-manager"
 DATA_ENV = "ACADEMIC_MANAGER_DATA"  # lo que lee academic_mcp.tools.resolve_runtime
 BACKUP_INFIX = ".academic-manager-"
+CURRENT_FOLDER = "Claude-Data"  # %LOCALAPPDATA%\\Claude-Data\\claude_<editor>
 
 NOT_INSTALLED = "no_instalado"
 NOT_CONNECTED = "sin_conectar"
@@ -40,7 +41,11 @@ class ClaudeDesktopError(Exception):
 
 
 def candidates(env=None):
-    """Carpetas posibles de Claude Desktop: la instalación normal y la de Microsoft Store."""
+    """Carpetas posibles de Claude Desktop: la normal, la antigua de Microsoft Store y la actual.
+
+    Microsoft Store guardaba sus datos en Packages; ahora los mueve a Claude-Data y allá solo deja un
+    aviso. La actual va de última porque, en empate, gana la última (ver `_rank`).
+    """
     env = os.environ if env is None else env
     found = []
     if env.get("APPDATA"):
@@ -51,18 +56,24 @@ def candidates(env=None):
             found += sorted(p / "LocalCache" / "Roaming" / "Claude" for p in packages.glob("Claude_*"))
         except OSError:
             pass
+        data = Path(env["LOCALAPPDATA"]) / "Claude-Data"
+        try:
+            found += sorted(p for p in data.glob("*") if p.name.casefold().startswith("claude_"))
+        except OSError:
+            pass
     return found
 
 
 def _rank(folder, order):
-    """Preferir la carpeta con otros archivos de Claude, luego la que ya tiene el archivo; en empate,
-    la de Microsoft Store (su carpeta desaparece al desinstalarla, así que si está, es la que se usa)."""
+    """Preferir la carpeta actual de Microsoft Store, que siempre es la que Claude usa; si no existe, la
+    que tiene otros archivos de Claude y luego la que ya tiene el archivo. En empate, la de Microsoft
+    Store (su carpeta desaparece al desinstalarla, así que si está, es la que se usa)."""
     try:
         names = [p.name for p in folder.iterdir()]
     except OSError:
         names = []
     others = any(not n.startswith(CONFIG_NAME) for n in names)
-    return (others, CONFIG_NAME in names, order)
+    return (folder.parent.name == CURRENT_FOLDER, others, CONFIG_NAME in names, order)
 
 
 def locate(env=None):
