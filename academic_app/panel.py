@@ -44,6 +44,7 @@ class Reading:
     value: object = None
     problem: str = None
     stale_index: bool = False
+    code: str = None  # código de AccessError, para distinguir «no existe» de «no se pudo leer»
 
 
 def _problem(exc):
@@ -77,7 +78,7 @@ def read(reader, *args, **kw):
     except (AccessError, SyncError, OSError, ValueError, KeyError, StopIteration, sqlite3.Error) as exc:
         print(f"Panel: no se pudo leer ({type(exc).__name__}).", file=sys.stderr, flush=True)
         stale = isinstance(exc, AccessError) and exc.code == "INDEX_STALE"
-        return Reading(problem=_problem(exc), stale_index=stale)
+        return Reading(problem=_problem(exc), stale_index=stale, code=getattr(exc, "code", None))
 
 
 # --- fechas y textos -------------------------------------------------------------------

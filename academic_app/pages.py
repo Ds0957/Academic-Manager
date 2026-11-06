@@ -179,9 +179,11 @@ textarea.copiar { width:100%; min-height:12em; padding:12px; border:1px solid va
 @dataclass
 class Response:
     status: int
-    body: str = ""
+    body: str = ""  # bytes para los scripts fijos de academic_app.assets
     location: str = None
     shutdown: bool = False
+    content_type: str = "text/html; charset=utf-8"
+    cache: str = "no-store"
 
 
 def esc(value):

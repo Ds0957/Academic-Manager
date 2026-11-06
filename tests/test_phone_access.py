@@ -451,6 +451,14 @@ class ListenerTests(ListenerCase):
                      "/panel/publicando/abc"):
             self.assertEqual(self.request("GET", path)[0].status, 200, path)
 
+    def test_subject_map_and_its_diagram_scripts_are_allowed(self):
+        self.login()
+        for path in ("/panel/materia/MAT-SO2/mapa", "/panel/materia/MAT-SO2/clase/CLS-SO2-20261020-01",
+                     "/panel/materia/MAT-SO2/clase/CLS-SO2-20261020-01/transcripcion",
+                     "/static/mermaid-12.2.0.min.js", "/static/diagramas.js"):
+            self.assertEqual(self.request("GET", path)[0].status, 200, path)
+        self.assertEqual(self.request("GET", "/static/otro.js")[0].status, 403)
+
     def test_cookie_attributes(self):
         code = self.access.new_pairing()
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)

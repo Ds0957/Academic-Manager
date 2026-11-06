@@ -14,6 +14,8 @@ Antes, lo que se decidía en un chat de ChatGPT no se guardaba en ningún sitio.
 | `task-status` | Cambio de estado de una tarea personal | `tareas` |
 | `class` | Clase sin grabación ni Capture, con un resumen opcional | `clases` (V2) y `notas` |
 | `batch` | Varias de `track`, `note`, `task` y `task-status` con una sola vista previa y una aprobación | las de cada elemento |
+| `map` | Mapa de estudio de una materia: temas, relaciones, citas de las fuentes y diagramas | `mapas` |
+| `class-index` | Índice de una clase: resumen muy corto y minutos de cada tema, comprobados con la transcripción | `indices_clase` |
 
 ## Contrato de dos pasos
 
@@ -159,6 +161,56 @@ scripts\academic-act.cmd batch --input C:\AcademicManagerData\temporales\lote.js
 - `class` no se admite en lotes: cada clase reserva su propia fila de `03 - Clases`.
 - Dos elementos no pueden tocar el mismo registro (la misma nota, tarea o actividad). Un `task-status` solo puede cambiar tareas que ya existen en la base, no una creada en el mismo lote.
 
+### `class-index`: índice de la clase
+
+Solo con `--input` (hasta 256 KB). Guarda dónde se encuentra cada cosa que se habló en una clase registrada. Guardar de nuevo **reemplaza** el índice anterior de esa clase y nunca toca su análisis, así que también sirve para clases publicadas.
+
+```json
+{"clase": "CLS-SO2-20261020-01", "indice": {
+  "resumen": "Se explicó la actividad del eje 3 y se repasó la planificación de procesos.",
+  "temas": [
+    {"titulo": "Instrucciones de la actividad", "categoria": "instrucciones", "momentos": [
+      {"inicio": "00:04:12", "texto": "Cómo se entrega", "cita": "se sube a Canvas en parejas"},
+      {"inicio": "01:20:18", "texto": "Repite la fecha", "cita": "la fecha de entrega del viernes"}]}
+  ]
+}}
+```
+
+Reglas (cualquier fallo es `INVALID_ARGUMENT` y nombra el tema y el tiempo):
+
+- `resumen`: obligatorio, hasta 900 caracteres.
+- `temas`: de 1 a 40; `titulo` hasta 120 caracteres; `categoria` opcional: `instrucciones`, `fechas`, `evaluacion`, `tareas` o `tema` (la predeterminada).
+- `momentos`: de 1 a 30 por tema, sin repetir, y se guardan en orden de tiempo. `texto` hasta 200 caracteres.
+- **Los minutos son reales:** `inicio` (`HH:MM:SS`) debe ser el tiempo inicial de un fragmento de la transcripción y `cita` (12 a 300 caracteres) debe estar en ese fragmento, sin importar espacios ni saltos de línea. Una transcripción sin tiempos no admite índice.
+
+### `map`: mapa de la materia
+
+Solo con `--input` (hasta 256 KB; las demás acciones siguen en 64 KB). Guarda el mapa de estudio de una materia: sus temas, cómo se relacionan, de qué fuente sale cada uno y diagramas en Mermaid. Guardar de nuevo **reemplaza** el mapa anterior de esa materia. Desde Claude Desktop se usa la herramienta `guardar_mapa` del conector ([43-conector-claude.md](43-conector-claude.md)), que llama a esta misma acción.
+
+```json
+{"materia": "MAT-SO2", "mapa": {
+  "resumen": "Procesos, hilos y planificación.",
+  "temas": [
+    {"id": "SO2", "titulo": "Sistemas Operativos II"},
+    {"id": "T1", "titulo": "Procesos", "padre": "SO2", "eje": 1,
+     "explicacion": "Programa en ejecución con su propio espacio de direcciones.",
+     "fuentes": [{"fuente_id": "lectura:91004:1:1", "cita": "Un proceso es un programa en ejecución."}]}
+  ],
+  "relaciones": [{"de": "T1", "a": "SO2", "texto": "es parte de"}],
+  "diagramas": [{"titulo": "Mapa mental", "mermaid": "mindmap\n  root((SO II))\n    Procesos"}]
+}}
+```
+
+Reglas (cualquier fallo es `INVALID_ARGUMENT` y nombra el tema, la relación o el diagrama):
+
+- `temas`: de 1 a 80. `id` único (letras, números, `-`, `_`); `titulo` hasta 120 caracteres; `explicacion` opcional hasta 1500; `padre` opcional, debe ser otro tema y sin ciclos; `eje` opcional, entero de 1 a 12.
+- `fuentes`: hasta 5 por tema, cada una con `fuente_id` (el que devuelven `search`/`source` o `buscar`/`leer_fuente`) y `cita` (12 a 400 caracteres). Todo tema con `padre` necesita al menos una. **La cita debe aparecer en el texto de esa fuente de la materia** (se ignoran espacios y saltos de línea); si no, no se guarda nada. Comprobarlo necesita el índice de búsqueda al día; si no lo está, el error es `SOURCE_UNAVAILABLE`.
+- `relaciones`: hasta 150, entre dos temas distintos del mapa, con `texto` hasta 80 caracteres, sin repetir.
+- `diagramas`: hasta 6, con `titulo` y `mermaid` (hasta 12 000 caracteres). La primera línea es el tipo: `mindmap`, `flowchart`, `graph`, `timeline`, `sequenceDiagram`, `stateDiagram`, `stateDiagram-v2`, `classDiagram`, `erDiagram` o `quadrantChart`. No se admiten directivas `%%{...}%%`.
+- El mapa completo no puede pasar de 200 KB.
+
+La vista previa añade `detalle`: `materia_id`, número de `temas`, `relaciones` y `diagramas`, si `reemplaza` un mapa guardado y cuántos `temas_anteriores` tenía.
+
 ## Una escritura a la vez
 
 Las escrituras del chat de este equipo se turnan: si otra está publicando, la vista previa o la publicación **esperan hasta 2 minutos** y luego vuelven a validar el plan desde cero. Solo se espera ante ocupaciones detectadas antes de escribir nada: el turno local, el estado local en edición o el lock compartido de otro escritor (la tarea diaria de Canvas, Capture u otro equipo). Si la espera se agota, el error es `STORE_BUSY` y basta repetir la misma orden con el mismo `plan_id`. Un lock sin fecha o con más de 10 minutos no se espera: queda de un fallo anterior y la orden falla enseguida con `STORE_UNAVAILABLE`, porque requiere recuperación supervisada.
@@ -222,6 +274,8 @@ Son tablas limpias: fechas `YYYY-MM-DD`, marcas de tiempo ISO-8601 UTC (`2026-10
 | `seguimiento` | `actividad_id` (clave), `estado`, `nota`, `puntos`, `comentario`, `actualizado_utc` |
 | `notas` | `nota_id` (clave, `NOTA-` + 16 hex), `materia_id`, `tipo` (`nota`, `decision`, `aclaracion`, `resumen_clase`), `texto`, `clase_id`, `creado_utc` |
 | `tareas` | `tarea_id` (clave, `TAR-` + 16 hex), `titulo`, `materia_id`, `fecha_limite`, `detalle`, `estado`, `creado_utc`, `actualizado_utc` |
+| `mapas` | `materia_id` (clave), `contenido` (JSON canónico del mapa, versión 1), `actualizado_utc` |
+| `indices_clase` | `clase_id` (clave), `materia_id`, `contenido` (JSON canónico del índice, versión 1), `actualizado_utc` |
 
 Los estados y tipos también se comprueban con `CHECK` en SQLite.
 

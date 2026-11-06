@@ -1,6 +1,6 @@
 """JSON CLI: python -m academic_operations preview|complete --job JOB_ID.
 
-Escrituras desde el chat: track|note|task|task-status|class|batch (ver docs/33-escritura-desde-chat.md).
+Escrituras desde el chat: track|note|task|task-status|class|batch|map|class-index (ver docs/33-escritura-desde-chat.md).
 """
 import argparse
 import json
@@ -21,6 +21,8 @@ CHAT_OPTIONS = {"--actividad": "actividad_id", "--materia": "materia_id", "--tar
 # Clave del archivo --input → campo: el nombre de la opción sin `--` y con `-` → `_`.
 INPUT_KEYS = {option[2:].replace("-", "_"): field for option, field in CHAT_OPTIONS.items()}
 MAX_INPUT_BYTES = 64 * 1024
+# Un mapa de la materia o un índice de clase (con sus citas) es más grande que una nota.
+MAX_MAP_INPUT_BYTES = 256 * 1024
 
 
 class JsonParser(argparse.ArgumentParser):
@@ -93,15 +95,32 @@ def _batch_request(content):
     return {"operaciones": items}
 
 
+def _map_request(content):
+    """{"materia": "MAT-…", "mapa": {...}}: el mapa va completo en el JSON."""
+    unknown = sorted(k for k in content if k not in ("materia", "mapa"))
+    if unknown:
+        raise _invalid_input(chat._public_message(f"claves no admitidas: {', '.join(unknown)}")[:200] + ".")
+    return {"materia_id": content.get("materia"), "mapa": content.get("mapa")}
+
+
+def _index_request(content):
+    """{"clase": "CLS-…", "indice": {...}}: el índice va completo en el JSON."""
+    unknown = sorted(k for k in content if k not in ("clase", "indice"))
+    if unknown:
+        raise _invalid_input(chat._public_message(f"claves no admitidas: {', '.join(unknown)}")[:200] + ".")
+    return {"clase_id": content.get("clase"), "indice": content.get("indice")}
+
+
 def _read_input(path, action=None):
     """Petición de chat desde un archivo JSON (evita que cmd.exe altere % ^ & \")."""
+    limit = MAX_MAP_INPUT_BYTES if action in ("map", "class-index") else MAX_INPUT_BYTES
     try:
         with open(path, "rb") as handle:
-            raw = handle.read(MAX_INPUT_BYTES + 1)
+            raw = handle.read(limit + 1)
     except OSError:
         raise _invalid_input("no se pudo leer el archivo indicado.") from None
-    if len(raw) > MAX_INPUT_BYTES:
-        raise _invalid_input("el archivo supera 64 KB.")
+    if len(raw) > limit:
+        raise _invalid_input(f"el archivo supera {limit // 1024} KB.")
     try:
         text = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
@@ -118,6 +137,10 @@ def _read_input(path, action=None):
         raise _invalid_input("el JSON debe ser un objeto con los campos de la operación.")
     if action == "batch":
         return _batch_request(content)
+    if action == "map":
+        return _map_request(content)
+    if action == "class-index":
+        return _index_request(content)
     return _fields(content)
 
 
@@ -148,6 +171,11 @@ def chat_main(argv):
             request = _read_input(args.input, action)
         elif action == "batch":
             raise OperationError("INVALID_ARGUMENT", 'batch requiere --input con {"operaciones": [...]}.')
+        elif action == "map":
+            raise OperationError("INVALID_ARGUMENT", 'map requiere --input con {"materia": ..., "mapa": {...}}.')
+        elif action == "class-index":
+            raise OperationError("INVALID_ARGUMENT",
+                                 'class-index requiere --input con {"clase": ..., "indice": {...}}.')
         runtime = Path(args.runtime).resolve()
         if args.plan_id is None and not args.approve:
             result = chat.preview(runtime, action, request)

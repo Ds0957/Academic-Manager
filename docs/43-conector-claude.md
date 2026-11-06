@@ -10,7 +10,7 @@ Es un servidor **MCP** (Model Context Protocol) local: Claude Desktop lo abre en
 
 ## Herramientas
 
-Todas son **de solo lectura** en esta fase: ninguna escribe en la base, en Drive ni en archivos. Usan los mismos lectores que el chat y el panel ([27](27-contrato-consulta-academica.md), [34](34-today.md), [35](35-summary.md), [36](36-anomalias.md), [41](41-panel.md)).
+Todas son **de solo lectura** salvo `guardar_mapa` y `guardar_indice_clase`, que guardan el mapa de una materia y el índice de una clase con vista previa y aprobación (ver más abajo). Las de lectura no escriben en la base, en Drive ni en archivos. Usan los mismos lectores que el chat y el panel ([27](27-contrato-consulta-academica.md), [34](34-today.md), [35](35-summary.md), [36](36-anomalias.md), [41](41-panel.md)).
 
 | Herramienta | Qué devuelve |
 |---|---|
@@ -25,6 +25,23 @@ Todas son **de solo lectura** en esta fase: ninguna escribe en la base, en Drive
 | `buscar` | Busca palabras en el material de una materia (`consulta`, `materia`, `limite` 1 a 30). |
 | `leer_fuente` | Lee un fragmento de una fuente (`fuente`, opcional `materia`, `offset`, `length` hasta 6000) para citarla. |
 | `anomalias` | Problemas detectados en los datos (opcional `materia`). |
+| `mapa` | Mapa de estudio guardado de una materia (`materia`): temas con explicación y citas, relaciones y diagramas Mermaid. Sin mapa, lo dice y sugiere crearlo. |
+| `guardar_mapa` | **Escribe.** Guarda el mapa de una materia (`materia`, `mapa`; para guardar, además `plan_id` y `aprobar: true`). |
+| `indice_clase` | Índice guardado de una clase (`clase`): un resumen muy corto y los minutos de cada tema. Sin índice, lo dice y sugiere crearlo. |
+| `guardar_indice_clase` | **Escribe.** Guarda el índice de una clase (`clase`, `indice`; para guardar, además `plan_id` y `aprobar: true`). |
+
+### `guardar_mapa`: el mapa de la materia
+
+Claude arma el mapa leyendo el material real (`buscar`, `leer_fuente`, `clases`) y lo guarda con el mismo contrato de dos pasos que las escrituras del chat ([33](33-escritura-desde-chat.md), acción `map`):
+
+1. **Vista previa.** Sin `aprobar`: valida el mapa y **comprueba que cada cita aparezca en su fuente** de la materia; devuelve `plan_id` y `detalle` (temas, relaciones, diagramas, si reemplaza uno guardado). No guarda nada.
+2. **Aprobación.** Claude muestra el resumen y pregunta. Solo si la persona aprueba, llama otra vez con el mismo `mapa`, ese `plan_id` y `aprobar: true`, y el mapa se publica en la base de Drive.
+
+`aprobar` sin `plan_id`, o `plan_id` sin `aprobar: true`, es un error y no escribe nada. Guardar **reemplaza** el mapa anterior de la materia. Si la publicación se corta a mitad, el mensaje pide consultar `mapa` antes de reintentar. En Claude Desktop es la única herramienta marcada como de escritura (`readOnlyHint: false`, `destructiveHint: true`), así que Claude Desktop también puede pedir permiso antes de usarla.
+
+### `guardar_indice_clase`: el índice de la clase
+
+Claude lee toda la transcripción con `leer_fuente` (`clase:<clase_id>:transcripcion`), escribe un resumen de 3 a 5 líneas y agrupa por tema los minutos en que se habló de cada cosa. Usa el mismo contrato de dos pasos ([33](33-escritura-desde-chat.md), acción `class-index`): sin `aprobar` valida y **comprueba que cada minuto abra un fragmento de la transcripción y que su cita esté en él**; solo con el `plan_id` y `aprobar: true` publica. Guardar **reemplaza** el índice anterior de la clase y no toca su análisis, así que también sirve para clases ya publicadas. La clase debe estar registrada y su transcripción, indexada.
 
 Los parámetros se revisan antes de leer nada (identificadores `MAT-…`, límites como en la línea de comandos). Si algo falla, Claude recibe un mensaje sencillo en español (por ejemplo, «La base de datos se está actualizando en este momento…»), nunca el error técnico ni rutas del PC.
 
@@ -85,7 +102,9 @@ La misma página trae un cuadro **Instrucciones para Claude** para pegar en las 
 1. Al empezar cada conversación, llamar primero a `ponerme_al_dia` (con la materia, si se va a hablar de una).
 2. Para el material de una materia, usar `buscar` y después `leer_fuente`, y citar la fuente de cada dato; si no se encuentra, decirlo.
 3. Para registrar entregas, notas, tareas o decisiones, usar Academic Manager: el panel o, cuando existan, las herramientas de escritura del conector, con vista previa y aprobación.
-4. Aunque Claude tenga Desktop Commander u otro acceso a los archivos del PC, **nunca** editar directamente los datos, la base de datos ni los archivos de Academic Manager.
+4. Para estudiar una materia, consultar su `mapa`; si no tiene, ofrecer crearlo con `guardar_mapa` desde el material real, mostrar el resumen y los diagramas y guardarlo solo con aprobación.
+5. Para saber en qué minuto de una clase se habló de algo, consultar `indice_clase`; si no tiene, ofrecer crearlo con `guardar_indice_clase` desde su transcripción y guardarlo solo con aprobación.
+6. Aunque Claude tenga Desktop Commander u otro acceso a los archivos del PC, **nunca** editar directamente los datos, la base de datos ni los archivos de Academic Manager.
 
 Desktop Commander sigue conectado y funcionando igual; estas instrucciones solo evitan que se use para cambiar los datos de Academic Manager por fuera de sus controles.
 

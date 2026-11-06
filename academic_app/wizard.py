@@ -29,7 +29,7 @@ from pathlib import Path
 
 from academic_config import paths
 
-from . import claude_desktop, forms, panel, registrar
+from . import assets, class_page, claude_desktop, forms, map_page, panel, registrar
 from .pages import Response, badge, csrf_field, esc, layout, notice
 
 SEMESTER = re.compile(r"20\d{2}-[1-3]")
@@ -43,6 +43,9 @@ STEPS = (("datos", "Carpeta de datos", "/paso/datos"),
 # Configuración completa para abrir el panel (equipo y tarea solo se conocen al abrirlos).
 COMPLETE_STEPS = ("datos", "canvas", "google", "drive", "materias")
 SUBJECT_PAGE = "/panel/materia/"
+MAP_SUFFIX = "/mapa"
+CLASS_PAGE = re.compile(r"/panel/materia/([^/]+)/clase/(CLS-[A-Za-z0-9_-]+)(/transcripcion)?")
+STATIC_PREFIX = "/static/"
 CANVAS_INBOX = "https://areandina.instructure.com/conversations"  # bandeja: abrirla no marca mensajes como leídos
 PUBLISHING_PAGE = "/panel/publicando/"
 RELOGIN_HINT_DAYS = 6
@@ -118,7 +121,7 @@ def _defaults():
     from canvas_sync import semester, workbook_enrollment
     from capture.sources import auth as drive_auth
     from . import updates
-    from academic_access import brief, canvas, summary, today
+    from academic_access import brief, canvas, core, summary, today
     from academic_projects.__main__ import render_all
     from canvas_sync.routine import workbook_version
     from academic_operations import chat
@@ -127,7 +130,9 @@ def _defaults():
             "sync_start": manual_sync.start, "sync_status": manual_sync.status,
             "panel_today": today.today, "panel_summary": summary.summary,
             "panel_brief": brief.subject_brief, "panel_instructions": render_all,
-            "panel_canvas": canvas.canvas_extras,
+            "panel_canvas": canvas.canvas_extras, "panel_map": core.subject_map,
+            "panel_class_index": core.class_index, "panel_class_indexes": core.class_indexes,
+            "panel_class_transcript": core.class_transcript,
             "workbook_version": workbook_version,
             "check_update": updates.check, "download_update": updates.download,
             "launch_update": updates.launch,
@@ -443,6 +448,15 @@ class Wizard:
                   ("GET", "/claude"): self.page_claude, ("POST", "/claude/conectar"): self.claude_connect,
                   ("POST", "/claude/quitar"): self.claude_disconnect}
         action = routes.get((method, path))
+        if action is None and method == "GET" and path.startswith(STATIC_PREFIX):
+            return assets.serve(path) or Response(404, layout("No encontrado", notice("Esta página no existe.",
+                                                                                       bad=True)))
+        found_class = CLASS_PAGE.fullmatch(path) if action is None and method == "GET" else None
+        if found_class:
+            action = functools.partial(self.panel_class, subject=found_class[1], class_id=found_class[2],
+                                       transcript=found_class[3] is not None)
+        if action is None and method == "GET" and path.startswith(SUBJECT_PAGE) and path.endswith(MAP_SUFFIX):
+            action = functools.partial(self.panel_map, subject=path[len(SUBJECT_PAGE):-len(MAP_SUFFIX)])
         if action is None and method == "GET" and path.startswith(SUBJECT_PAGE):
             action = functools.partial(self.panel_subject, subject=path[len(SUBJECT_PAGE):])
         if action is None and method == "GET" and path.startswith(PUBLISHING_PAGE):
@@ -1294,6 +1308,52 @@ class Wizard:
         return self._panel("materias", "Materias", f'<div class="cards">{"".join(cards)}</div>', csrf,
                            subtitle=f"{count} en el semestre {data['semestre']['semestre_id']}.")
 
+    def panel_map(self, csrf, subject, **_):
+        """Mapa de estudio de la materia: diagramas, árbol de temas con citas y relaciones."""
+        runtime = self._panel_runtime()
+        if runtime is None:
+            return self._panel_setup("materias", "Mapa de la materia", csrf)
+        summary = self._read("panel_summary", runtime)
+        if summary.problem:
+            return self._panel("materias", "Mapa de la materia", self._problem_card(summary), csrf)
+        names = panel.names_of(summary.value)
+        if subject not in names:  # solo materias del semestre activo; nada de la ruta llega a la página
+            body = notice("Esa materia no está en el semestre activo.", bad=True) + \
+                '<p><a href="/panel/materias">Ver sus materias</a></p>'
+            return self._panel("materias", "Materia no encontrada", body, csrf, status=404)
+        back = f'<p><a href="{esc(SUBJECT_PAGE + subject)}">← Volver a {esc(names[subject])}</a></p>'
+        found = self._read("panel_map", runtime, subject)
+        body = self._problem_card(found) if found.problem else map_page.page(found.value, names[subject])
+        return self._panel("materias", "Mapa de la materia", back + body, csrf, subtitle=names[subject])
+
+    def panel_class(self, csrf, subject, class_id, transcript=False, **_):
+        """Índice de la clase, o su transcripción con un ancla por minuto."""
+        title = "Transcripción de la clase" if transcript else "Índice de la clase"
+        runtime = self._panel_runtime()
+        if runtime is None:
+            return self._panel_setup("materias", title, csrf)
+        summary = self._read("panel_summary", runtime)
+        if summary.problem:
+            return self._panel("materias", title, self._problem_card(summary), csrf)
+        names = panel.names_of(summary.value)
+        found = self._read("panel_class_index", runtime, class_id) if subject in names else None
+        if found is None or found.code == "NOT_FOUND" or (found.value and found.value["materia_id"] != subject):
+            body = notice("Esa clase no está en las materias del semestre activo.", bad=True) + \
+                '<p><a href="/panel/materias">Ver sus materias</a></p>'
+            return self._panel("materias", "Clase no encontrada", body, csrf, status=404)
+        if found.problem:
+            return self._panel("materias", title, self._problem_card(found), csrf)
+        page = f"{SUBJECT_PAGE}{subject}/clase/{class_id}"
+        subtitle = found.value.get("titulo") or names[subject]
+        if not transcript:
+            back = f'<p><a href="{esc(SUBJECT_PAGE + subject)}">← Volver a {esc(names[subject])}</a></p>'
+            body = class_page.page(found.value, page + "/transcripcion")
+            return self._panel("materias", title, back + body, csrf, subtitle=subtitle)
+        back = f'<p><a href="{esc(page)}">← Volver al índice de la clase</a></p>'
+        fragments = self._read("panel_class_transcript", runtime, class_id, subject)
+        body = self._problem_card(fragments) if fragments.problem else class_page.transcript(fragments.value)
+        return self._panel("materias", title, back + body, csrf, subtitle=subtitle)
+
     def panel_subject(self, csrf, subject, **_):
         runtime = self._panel_runtime()
         if runtime is None:
@@ -1355,7 +1415,9 @@ class Wizard:
                   'Project de esta materia en ChatGPT.</p>'
                 + panel.copy_box(f"contexto-{subject}", "Contexto de la materia", panel.brief_text(data, canvas))
                 + "</div>")
-        side = ('<div class="card"><h2>Nueva tarea</h2>' + forms.new_task_form(csrf, subject, back) + "</div>"
+        side = (map_page.card(self._read("panel_map", runtime, subject).value, back + MAP_SUFFIX)
+                + class_page.card(self._read("panel_class_indexes", runtime, subject).value, back + "/clase/")
+                + '<div class="card"><h2>Nueva tarea</h2>' + forms.new_task_form(csrf, subject, back) + "</div>"
                 + '<div class="card"><h2>Nueva decisión o nota</h2>'
                 + forms.new_note_form(csrf, subject, back) + "</div>"
                 + (f'<div class="card"><h2>Tareas abiertas</h2><ul class="rows">{tasks}</ul></div>' if tasks else "")
@@ -1814,7 +1876,11 @@ CLAUDE_INSTRUCTIONS = (
     "de cada dato (el nombre del archivo o de la clase). Si no lo encuentras, dilo; no lo inventes.\n"
     "3. Para registrar entregas, notas, tareas o decisiones, usa Academic Manager: el panel o, cuando existan, "
     "las herramientas de escritura del conector, siempre con vista previa y mi aprobación.\n"
-    "4. Aunque tengas Desktop Commander u otro acceso a los archivos del PC, nunca edites directamente los "
+    "4. Para estudiar una materia, consulta su mapa con mapa. Si no tiene, ofréceme crearlo con guardar_mapa a "
+    "partir del material real, muéstrame el resumen y los diagramas y guárdalo solo si lo apruebo.\n"
+    "5. Para saber en qué minuto de una clase se habló de algo, consulta indice_clase. Si no tiene, ofréceme "
+    "crearlo con guardar_indice_clase a partir de su transcripción y guárdalo solo si lo apruebo.\n"
+    "6. Aunque tengas Desktop Commander u otro acceso a los archivos del PC, nunca edites directamente los "
     "datos, la base de datos ni los archivos de Academic Manager.")
 
 

@@ -20,8 +20,10 @@ from canvas_sync.common import StoreBusy, SyncError
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME = Path("/runtime-que-no-existe")
 RPC_TIMEOUT = 30  # seconds per request in the stdio tests; a hang fails instead of blocking the suite
-EXPECTED = {"ponerme_al_dia", "hoy", "resumen", "materias", "materia", "actividades", "clases",
-            "notas", "tareas", "buscar", "leer_fuente", "anomalias"}
+READ_TOOLS = {"ponerme_al_dia", "hoy", "resumen", "materias", "materia", "actividades", "clases",
+              "notas", "tareas", "buscar", "leer_fuente", "anomalias", "mapa", "indice_clase"}
+WRITE_TOOLS = {"guardar_mapa", "guardar_indice_clase"}  # preview → plan_id → approval (tests/test_mcp_map.py)
+EXPECTED = READ_TOOLS | WRITE_TOOLS
 
 
 def rows(n, **extra):
@@ -29,11 +31,11 @@ def rows(n, **extra):
 
 
 class RegistryTests(unittest.TestCase):
-    def test_every_read_tool_is_registered_read_only_with_a_closed_schema(self):
+    def test_every_tool_is_registered_with_its_access_and_a_closed_schema(self):
         self.assertEqual(set(tools.TOOLS), EXPECTED)
         for name, tool in tools.TOOLS.items():
             self.assertRegex(name, r"^[a-z_]+$")
-            self.assertTrue(tool.read_only, name)
+            self.assertIs(tool.read_only, name in READ_TOOLS, name)
             self.assertGreater(len(tool.description), 40, name)
             self.assertEqual(tool.schema["type"], "object", name)
             self.assertIs(tool.schema["additionalProperties"], False, name)
@@ -292,8 +294,9 @@ class StdioServerTests(unittest.TestCase):
             listed = {t["name"]: t for t in listed["result"]["tools"]}
             self.assertEqual(set(listed), EXPECTED)
             for tool in listed.values():
-                self.assertIs(tool["annotations"]["readOnlyHint"], True)
-                self.assertIs(tool["annotations"]["destructiveHint"], False)
+                read = tool["name"] in READ_TOOLS
+                self.assertIs(tool["annotations"]["readOnlyHint"], read)
+                self.assertIs(tool["annotations"]["destructiveHint"], not read)
                 self.assertIs(tool["inputSchema"]["additionalProperties"], False)
             done = _rpc(process, {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
                                   "params": {"name": "tareas", "arguments": {"estado": "pendiente"}}})

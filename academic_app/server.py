@@ -29,9 +29,11 @@ MAX_BODY = 64 * 1024        # formularios y el JSON del cliente OAuth (~1 KB)
 DRAIN_LIMIT = 1024 * 1024   # se descarta hasta 1 MB de un cuerpo rechazado para responder limpio
 IDLE_SECONDS = 30 * 60
 MAX_FIELDS = 200
+# Scripts: el botón de copiar del panel (por su hash) y los archivos fijos de academic_app.assets
+# ('self': cualquier otra ruta responde HTML y nosniff impide ejecutarla como script).
 CSP = ("default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; "
        "frame-ancestors 'none'; base-uri 'none'; "
-       f"script-src '{pages.COPY_SCRIPT_HASH}'")  # solo el botón de copiar del panel
+       f"script-src '{pages.COPY_SCRIPT_HASH}' 'self'")
 
 
 def _same(given, expected):
@@ -192,11 +194,11 @@ class Handler(BaseHTTPRequestHandler):
             srv.touch(-1)
 
     def _send(self, response, cookie=None):
-        body = response.body.encode("utf-8")
+        body = response.body if isinstance(response.body, bytes) else response.body.encode("utf-8")
         self.send_response(response.status)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Type", response.content_type)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", response.cache)
         self.send_header("Content-Security-Policy", CSP)
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("X-Content-Type-Options", "nosniff")

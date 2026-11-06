@@ -33,7 +33,7 @@ def _tool(tool):
     return types.Tool(name=tool.name, title=tool.title, description=tool.description,
                       input_schema=tool.schema,
                       annotations=types.ToolAnnotations(title=tool.title, read_only_hint=tool.read_only,
-                                                        destructive_hint=False, idempotent_hint=True,
+                                                        destructive_hint=tool.destructive, idempotent_hint=True,
                                                         open_world_hint=False))
 
 
@@ -65,7 +65,8 @@ def build(explicit_runtime=None):
         return tool.schema if tool else None
 
     return Server(NAME, version=_version(), title="Academic Manager",
-                  description="Consulta de solo lectura de los datos académicos de Academic Manager.",
+                  description=("Consulta de los datos académicos de Academic Manager y guardado, con aprobación, "
+                               "del mapa de estudio de cada materia y del índice de cada clase."),
                   get_tool_input_schema=input_schema, on_list_tools=list_tools, on_call_tool=call_tool)
 
 
@@ -78,7 +79,7 @@ async def serve(explicit_runtime=None):
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="python -m academic_mcp",
                                      description="Conector de Academic Manager para Claude Desktop "
-                                                 "(MCP por stdio, solo lectura).",
+                                                 "(MCP por stdio; solo escribe mapas de materia e índices de clase, con aprobación).",
                                      epilog=paths.DATA_HELP)
     parser.add_argument("--runtime", help="Carpeta de datos (si no, la de siempre).")
     args = parser.parse_args(argv)

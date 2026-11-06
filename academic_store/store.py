@@ -55,6 +55,14 @@ RECORD_TABLES = {
         "materia_id TEXT, fecha_limite TEXT, detalle TEXT, "
         f"estado TEXT NOT NULL CHECK (estado IN {_sql_values(TASK_STATES)}), "
         "creado_utc TEXT NOT NULL, actualizado_utc TEXT NOT NULL)"),
+    # Un mapa por materia: JSON canónico validado por academic_operations.subject_map.
+    "mapas": (
+        "CREATE TABLE IF NOT EXISTS mapas (materia_id TEXT PRIMARY KEY, contenido TEXT NOT NULL, "
+        "actualizado_utc TEXT NOT NULL)"),
+    # Un índice por clase: JSON canónico validado por academic_operations.class_index.
+    "indices_clase": (
+        "CREATE TABLE IF NOT EXISTS indices_clase (clase_id TEXT PRIMARY KEY, materia_id TEXT NOT NULL, "
+        "contenido TEXT NOT NULL, actualizado_utc TEXT NOT NULL)"),
 }
 
 

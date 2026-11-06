@@ -1,4 +1,4 @@
-"""Escrituras desde el chat: seguimiento de entregas, notas, tareas y clases sin Capture.
+"""Escrituras desde el chat: seguimiento de entregas, notas, tareas, clases sin Capture, mapas e índices.
 
 Mismo contrato de dos pasos que `preview`/`complete`: sin aprobación solo se calcula el plan
 y su `plan_id` (sha256 del JSON canónico de la operación); con `--plan-id` idéntico y
@@ -21,7 +21,7 @@ from capture.models import CaptureError
 from capture.storage.job import job_lock
 from .actions import OperationError, _phase_error
 
-ACTIONS = ("track", "note", "task", "task-status", "class", "batch")
+ACTIONS = ("track", "note", "task", "task-status", "class", "batch", "map", "class-index")
 FIELDS = {
     "track": ("actividad_id", "estado", "nota", "puntos", "comentario"),
     "note": ("materia_id", "tipo", "texto"),
@@ -29,6 +29,8 @@ FIELDS = {
     "task-status": ("tarea_id", "estado"),
     "class": ("materia_id", "fecha", "titulo", "resumen"),
     "batch": ("operaciones",),
+    "map": ("materia_id", "mapa"),
+    "class-index": ("clase_id", "indice"),
 }
 # `class` queda fuera de los lotes: cada clase reserva su fila libre de 03 - Clases.
 BATCH_ACTIONS = ("track", "note", "task", "task-status")
@@ -179,6 +181,20 @@ def _operation(path, action, request):
         _fail("INVALID_ARGUMENT", f"{action} no admite: {', '.join(extra)}.")
     if action == "batch":
         return _batch(path, request)
+    if action == "map":
+        from . import subject_map
+        subject = _subject(path, request)
+        content = subject_map.normalize(request.get("mapa"))
+        return {"accion": action, "mapa": {"materia_id": subject, "contenido": subject_map.dump(content)}}
+    if action == "class-index":
+        from . import class_index
+        class_id = _id(request, "clase_id")
+        row = next((r for r in _sheet(path, "03 - Clases") if str(r.get("clase_id")) == class_id), None)
+        if row is None:
+            _fail("NOT_FOUND", "clase_id no existe en la base.")
+        content = class_index.normalize(request.get("indice"))
+        return {"accion": action, "indice": {"clase_id": class_id, "materia_id": str(row["materia_id"]),
+                                             "contenido": class_index.dump(content)}}
     if action == "track":
         estado = _choice(request, "estado", TRACK_STATES)
         nota, puntos = _number(request, "nota"), _number(request, "puntos")
@@ -257,6 +273,18 @@ def _pending(path, operation):
         if current is not None and _same(current, wanted):
             return []
         return [{"tabla": "seguimiento", "accion": "guardar", "registro": wanted}]
+    if action == "map":
+        wanted = operation["mapa"]
+        current = records.find(path, "mapas", wanted["materia_id"])
+        if current is not None and current["contenido"] == wanted["contenido"]:
+            return []
+        return [{"tabla": "mapas", "accion": "guardar", "registro": wanted}]
+    if action == "class-index":
+        wanted = operation["indice"]
+        current = records.find(path, "indices_clase", wanted["clase_id"])
+        if current is not None and current["contenido"] == wanted["contenido"]:
+            return []
+        return [{"tabla": "indices_clase", "accion": "guardar", "registro": wanted}]
     if action == "task":
         return _insert(path, "tareas", operation["tarea"])
     if action == "task-status":
@@ -366,12 +394,47 @@ def _preview(runtime, action, request):
     try:
         operation = _operation(path, action, request)
         pending = _pending(path, operation)
+        details = (_map_details(runtime, path, operation) if action == "map" else
+                   _index_details(runtime, path, operation) if action == "class-index" else None)
     except PlanConflict as exc:
         raise OperationError("CONFLICT", _public_message(exc)) from exc
     except store.StoreError as exc:
         raise OperationError("STORE_UNAVAILABLE", _public_message(exc)) from exc
-    return {"operation": operation, "plan_id": _digest(operation), "already_applied": not pending,
-            "requires_explicit_approval": True}
+    result = {"operation": operation, "plan_id": _digest(operation), "already_applied": not pending,
+              "requires_explicit_approval": True}
+    if details is not None:
+        result["detalle"] = details
+    return result
+
+
+def _moments(content):
+    return sum(len(topic["momentos"]) for topic in content["temas"])
+
+
+def _index_details(runtime, path, operation):
+    """Comprueba los minutos del índice y resume lo que guardará la aprobación."""
+    from . import class_index
+    wanted = operation["indice"]
+    content = json.loads(wanted["contenido"])
+    subject, class_id = wanted["materia_id"], wanted["clase_id"]
+    class_index.check_moments(class_index.transcript_of(runtime, subject, class_id), content)
+    current = records.find(path, "indices_clase", class_id)
+    return {"clase_id": class_id, "materia_id": subject, "temas": len(content["temas"]),
+            "momentos": _moments(content), "reemplaza": current is not None,
+            "momentos_anteriores": _moments(json.loads(current["contenido"])) if current else 0}
+
+
+def _map_details(runtime, path, operation):
+    """Comprueba las citas del mapa y resume lo que guardará la aprobación."""
+    from . import subject_map
+    wanted = operation["mapa"]
+    content = json.loads(wanted["contenido"])
+    subject_map.check_citations(runtime, wanted["materia_id"], content)
+    current = records.find(path, "mapas", wanted["materia_id"])
+    previous = len(json.loads(current["contenido"])["temas"]) if current else 0
+    return {"materia_id": wanted["materia_id"], "temas": len(content["temas"]),
+            "relaciones": len(content["relaciones"]), "diagramas": len(content["diagramas"]),
+            "reemplaza": current is not None, "temas_anteriores": previous}
 
 
 def _rebuild_index(runtime):

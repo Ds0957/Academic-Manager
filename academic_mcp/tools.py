@@ -1,7 +1,9 @@
-"""Read tools of the Claude Desktop connector, independent of the MCP SDK (docs/43).
+"""Tools of the Claude Desktop connector, independent of the MCP SDK (docs/43).
 
-Each tool is a thin adapter over the existing read contract (`academic_access`, docs/27, 34, 35,
-36) and the Canvas extras of the panel. Arguments are checked against the tool's JSON schema
+Each read tool is a thin adapter over the existing read contract (`academic_access`, docs/27, 34,
+35, 36) and the Canvas extras of the panel. The write tools, `guardar_mapa` and
+`guardar_indice_clase`, go through the chat write contract (`academic_operations.chat`, docs/33): preview first, save only with the
+preview's `plan_id` and an explicit approval. Arguments are checked against the tool's JSON schema
 before any reader runs; every failure becomes a `ToolError` with a plain Spanish message for the
 person. Reader exception texts are never shown and the log only records the exception type.
 """
@@ -17,6 +19,7 @@ from academic_access import anomalies, brief, core, summary, today
 from academic_access.canvas import canvas_extras
 from academic_config import paths
 from canvas_sync.common import StoreBusy, SyncError
+from academic_operations.actions import OperationError
 
 CAP = 20  # Longest list `ponerme_al_dia` returns; the paged tools show the rest.
 
@@ -53,6 +56,7 @@ class Tool:
     schema: dict
     handler: Callable
     read_only: bool = True
+    destructive: bool = False  # True when it can replace data the person already saved
 
 
 # --- argument schemas ------------------------------------------------------------------
@@ -100,11 +104,19 @@ def _check(schema, arguments):
             if type(value) is not int or not rule["minimum"] <= value <= rule["maximum"]:
                 raise ToolError(f"«{name}» debe ser un número entero entre {rule['minimum']} "
                                 f"y {rule['maximum']}.")
+        elif rule["type"] == "boolean":
+            if type(value) is not bool:
+                raise ToolError(f"«{name}» debe ser true o false.")
+        elif rule["type"] == "object":
+            if not isinstance(value, dict):
+                raise ToolError(f"«{name}» debe ser un objeto JSON.")
         elif not isinstance(value, str):
             raise ToolError(f"«{name}» debe ser texto.")
         elif "enum" in rule and value not in rule["enum"]:
             raise ToolError(f"«{name}» debe ser uno de: {', '.join(rule['enum'])}.")
         elif "pattern" in rule and not _matches(rule["pattern"], value):
+            if rule["pattern"] != SUBJECT_PATTERN:
+                raise ToolError(f"«{name}» no tiene el formato esperado.")
             raise ToolError(f"«{name}» debe ser un identificador de materia como MAT-ABC; "
                             "use la herramienta «materias» para verlos.")
         elif not rule.get("minLength", 0) <= len(value) <= rule.get("maxLength", 10_000):
@@ -309,6 +321,166 @@ _TOOLS = [
          lambda runtime, a: anomalies.anomalies(runtime, subject=a.get("materia"))),
 ]
 
+# --- subject map (odd/tasks/mapa-materia.md) ---------------------------------------------
+PLAN_PATTERN = r"^[0-9a-f]{64}$"
+SAVE_UNCERTAIN = ("No se sabe si {thing} quedó guardado (la publicación se cortó a mitad). Consulte "
+                  "«{reader}» antes de volver a intentarlo.")
+SAVE_FAILED = ("{thing} no se guardó: la base publicada en Drive no estaba disponible. Revise que "
+               "Google Drive esté abierto y vuelva a intentarlo en un rato.")
+# Códigos cuyo mensaje ya es texto sencillo para la persona (se quitan rutas por si acaso).
+PLAIN_OPERATION_CODES = ("INVALID_ARGUMENT", "NOT_FOUND", "CONFLICT", "SOURCE_UNAVAILABLE",
+                         "STORE_BUSY", "APPROVAL_REQUIRED")
+
+
+def _operation_message(exc, thing, reader):
+    from academic_operations.chat import _public_message
+    if getattr(exc, "published", "no") == "incierto":
+        return SAVE_UNCERTAIN.format(thing=thing, reader=reader)
+    if exc.code == "PLAN_CHANGED":
+        return (f"{thing.capitalize()} o la base cambiaron desde la vista previa. Pida una vista previa nueva "
+                "(llame sin «aprobar») y vuelva a pedir aprobación.")
+    if exc.code in PLAIN_OPERATION_CODES:
+        return _public_message(exc)
+    return SAVE_FAILED.format(thing=thing.capitalize())
+
+
+def _save(runtime, args, action, request, *, thing, reader, argument, show):
+    """Vista previa sin «aprobar»; con el «plan_id» y aprobar: true, guarda."""
+    from academic_operations import chat
+    if args.get("aprobar") is True:
+        if "plan_id" not in args:
+            raise ToolError("Para guardar indique el «plan_id» de la vista previa junto con aprobar: true.")
+        try:
+            done = chat.apply(runtime, action, request, plan_id=args["plan_id"], approved=True)
+        except OperationError as exc:
+            raise ToolError(_operation_message(exc, thing, reader)) from None
+        return {"guardado": True, "ya_guardado": done["already_applied"], "aviso": done.get("warning")}
+    if "plan_id" in args or "aprobar" in args:
+        raise ToolError(f"Para guardar, llame con el mismo «{argument}», su «plan_id» y aprobar: true; sin "
+                        "ellos solo se genera la vista previa.")
+    try:
+        preview = chat.preview(runtime, action, request)
+    except OperationError as exc:
+        raise ToolError(_operation_message(exc, thing, reader)) from None
+    return {"guardado": False, "plan_id": preview["plan_id"], "detalle": preview.get("detalle"),
+            "ya_guardado": preview["already_applied"],
+            "siguiente_paso": (f"Muestre a la persona {show} y pregúntele si lo guarda. Solo si lo aprueba de "
+                               f"forma explícita, llame otra vez con el mismo «{argument}», este «plan_id» y "
+                               "aprobar: true.")}
+
+
+def _read_map(runtime, args):
+    result = core.subject_map(runtime, args["materia"])
+    if result["mapa"] is None:
+        result["aviso"] = ("Esta materia todavía no tiene mapa. Puede crearlo con «guardar_mapa» a "
+                           "partir del material real («buscar» y «leer_fuente»).")
+    return result
+
+
+def _save_map(runtime, args):
+    return _save(runtime, args, "map", {"materia_id": args["materia"], "mapa": args["mapa"]},
+                 thing="el mapa", reader="mapa", argument="mapa",
+                 show="el resumen del mapa (temas y diagramas)")
+
+
+MAP_SCHEMA = {
+    "type": "object",
+    "description": ("Mapa completo de la materia. Campos: «resumen» (opcional, hasta 1000 caracteres); "
+                    "«temas» (1 a 80) con «id» único, «titulo», «explicacion» opcional, «padre» (id de "
+                    "otro tema; solo el tema raíz va sin padre), «eje» opcional (1 a 12) y «fuentes» "
+                    "(hasta 5 objetos {«fuente_id», «cita»}); «relaciones» (hasta 150 objetos {«de», "
+                    "«a», «texto»}); «diagramas» (hasta 6 objetos {«titulo», «mermaid»})."),
+}
+
+MAP_TOOLS = [
+    Tool("mapa", "Mapa de la materia",
+         "Devuelve el mapa de estudio guardado de una materia: temas con su explicación y sus fuentes "
+         "citadas, relaciones entre temas y diagramas en Mermaid. Úsela para explicar la materia, "
+         "repasar o como base antes de actualizar el mapa con «guardar_mapa».",
+         _schema({"materia": _subject()}, ["materia"]), _read_map),
+    Tool("guardar_mapa", "Guardar el mapa de la materia",
+         "Guarda el mapa de estudio de una materia, construido a partir de su material real. Cómo "
+         "armarlo: 1) lea el material con «materia», «clases», «buscar» y «leer_fuente» (ejes y clases); "
+         "2) defina un tema raíz con el nombre de la materia y entre 15 y 40 temas más con su «padre», "
+         "cada uno con una «explicacion» breve y clara en español; 3) cada tema que no sea la raíz lleva "
+         "de 1 a 3 «fuentes»: el «fuente_id» y una «cita» copiada literal (12 a 400 caracteres) del texto "
+         "que devolvió leer_fuente; las citas se comprueban y una cita inventada hace fallar la vista "
+         "previa; 4) añada relaciones entre temas con un verbo corto («usa», «es un tipo de», «depende "
+         "de»); 5) añada 1 a 3 diagramas mermaid: un «mindmap» de toda la materia y un «flowchart» con "
+         "las relaciones clave, con etiquetas cortas y sin directivas %%{ }%%. Primero llámela sin "
+         "«aprobar»: valida el mapa, devuelve un resumen y un «plan_id» y no guarda nada. Muestre el "
+         "resumen a la persona y solo si ella lo aprueba de forma explícita, llame otra vez con el mismo "
+         "«mapa», ese «plan_id» y aprobar: true. Guardar reemplaza el mapa anterior de la materia: para "
+         "cambiar uno existente, léalo con «mapa», modifíquelo y guárdelo completo.",
+         _schema({"materia": _subject(), "mapa": MAP_SCHEMA,
+                  "plan_id": {"type": "string", "pattern": PLAN_PATTERN,
+                              "description": "«plan_id» que devolvió la vista previa (solo para guardar)."},
+                  "aprobar": {"type": "boolean",
+                              "description": "true solo cuando la persona aprobó guardar este mapa."}},
+                 ["materia", "mapa"]),
+         _save_map, read_only=False, destructive=True),
+]
+
+# --- class index (odd/tasks/indice-clase.md) ----------------------------------------------
+CLASS_PATTERN = r"^CLS-[A-Za-z0-9_-]{1,70}$"
+
+
+def _class(text="Identificador exacto de la clase (CLS-…), como lo devuelve «clases»."):
+    return {"type": "string", "pattern": CLASS_PATTERN, "description": text}
+
+
+def _read_index(runtime, args):
+    result = core.class_index(runtime, args["clase"])
+    if result["indice"] is None:
+        result["aviso"] = ("Esta clase todavía no tiene índice. Puede crearlo con «guardar_indice_clase» a "
+                           "partir de su transcripción («leer_fuente»).")
+    return result
+
+
+def _save_index(runtime, args):
+    return _save(runtime, args, "class-index", {"clase_id": args["clase"], "indice": args["indice"]},
+                 thing="el índice", reader="indice_clase", argument="indice",
+                 show="el resumen del índice (temas y momentos)")
+
+
+INDEX_SCHEMA = {
+    "type": "object",
+    "description": ("Índice completo de la clase. Campos: «resumen» (3 a 5 líneas, hasta 900 caracteres: de qué "
+                    "trató la clase a grandes rasgos); «temas» (1 a 40) con «titulo», «categoria» opcional "
+                    "(instrucciones, fechas, evaluacion, tareas o tema) y «momentos» (1 a 30 objetos {«inicio», "
+                    "«texto», «cita»})."),
+}
+
+INDEX_TOOLS = [
+    Tool("indice_clase", "Índice de la clase",
+         "Devuelve el índice guardado de una clase: un resumen muy corto y, por cada tema, los minutos en "
+         "que se habló de él. Úsela para responder en qué parte de la clase se dijo algo o para llevar a la "
+         "persona a ese minuto.",
+         _schema({"clase": _class()}, ["clase"]), _read_index),
+    Tool("guardar_indice_clase", "Guardar el índice de la clase",
+         "Guarda el índice de una clase: dónde se encuentra cada cosa que se habló, con sus minutos. Cómo "
+         "armarlo: 1) lea toda la transcripción con «leer_fuente», fuente_id «clase:<clase>:transcripcion» "
+         "(por partes, con «offset», hasta que «hay_mas» sea false); 2) escriba un «resumen» de 3 a 5 líneas "
+         "con lo que se trató a grandes rasgos; 3) agrupe por tema todo lo que dijo el profesor: un tema "
+         "reúne todos sus momentos aunque estén separados en la clase; 4) use las categorías fijas para lo "
+         "administrativo: «instrucciones» (cómo hacer o entregar algo), «fechas», «evaluacion» y «tareas»; "
+         "el contenido de la materia va en «tema»; 5) cada momento lleva «inicio» (el tiempo inicial del "
+         "fragmento, HH:MM:SS, copiado tal cual de la transcripción), «texto» (qué se dice ahí, una línea) "
+         "y «cita» (de 12 a 300 caracteres copiados literalmente de ese mismo fragmento). Los minutos se "
+         "comprueban: un tiempo o una cita que no coincidan hacen fallar la vista previa. Primero llámela "
+         "sin «aprobar»: valida el índice, devuelve un resumen y un «plan_id» y no guarda nada. Muéstrelo a "
+         "la persona y solo si ella lo aprueba de forma explícita, llame otra vez con el mismo «indice», ese "
+         "«plan_id» y aprobar: true. Guardar reemplaza el índice anterior de la clase y no toca su análisis.",
+         _schema({"clase": _class(), "indice": INDEX_SCHEMA,
+                  "plan_id": {"type": "string", "pattern": PLAN_PATTERN,
+                              "description": "«plan_id» que devolvió la vista previa (solo para guardar)."},
+                  "aprobar": {"type": "boolean",
+                              "description": "true solo cuando la persona aprobó guardar este índice."}},
+                 ["clase", "indice"]),
+         _save_index, read_only=False, destructive=True),
+]
+
+
 def _without_local_path(found):
     """Claude cites by «fuente_id»; the text file's absolute path on this PC is not needed."""
     if isinstance(found, dict):
@@ -316,7 +488,7 @@ def _without_local_path(found):
     return found
 
 
-TOOLS = {tool.name: tool for tool in _TOOLS}
+TOOLS = {tool.name: tool for tool in [*_TOOLS, *MAP_TOOLS, *INDEX_TOOLS]}
 
 
 def call(name, arguments, runtime):
@@ -327,6 +499,8 @@ def call(name, arguments, runtime):
     args = _check(tool.schema, arguments)
     try:
         result = tool.handler(Path(runtime), args)
+    except ToolError:
+        raise
     except Exception as exc:  # noqa: BLE001 - nothing internal may reach the person
         _log(name, exc)
         raise ToolError(plain_message(exc)) from None

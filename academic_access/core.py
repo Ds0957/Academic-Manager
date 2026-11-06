@@ -10,6 +10,7 @@ import re
 
 from academic_knowledge import index as knowledge
 from academic_store import records, store
+from capture.academic_manager.database import _date_text
 from capture.storage.monitor import list_jobs, job_summary
 from canvas_sync.common import SyncError
 from canvas_sync.routine import workbook_version
@@ -89,6 +90,7 @@ ACTIVITY_FIELDS = (
     "lms", "objeto_externo_tipo", "objeto_externo_id", "url_fuente",
     "verificacion", "notas", "fecha_envio_real", "referencias_externas"
 )
+TRANSCRIPT_LINE = re.compile(r"\[(\d{2}:\d{2}:\d{2})[–-](\d{2}:\d{2}:\d{2})\]\s*(.*)")
 CLASS_FIELDS = ("clase_id", "materia_id", "fecha", "titulo", "tema_principal",
                 "estado_sesion", "estado_grabacion", "transcripcion", "analisis",
                 "fuente", "verificacion", "notas")
@@ -360,13 +362,49 @@ def _hash_file(path):
 
 def source(runtime, source_id, *, subject=None, offset=0, length=3000):
     manifest, freshness = _required_index(runtime)
-    obj = manifest["data"]["fuentes"].get(source_id)
-    if obj is None or (subject is not None and obj.get("materia_id") != subject):
-        raise AccessError("NOT_FOUND", "Fuente no registrada para esta materia.")
+    obj = _source_entry(manifest, source_id, subject)
     if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
         raise AccessError("INVALID_ARGUMENT", "offset debe ser entero no negativo.")
     if not isinstance(length, int) or isinstance(length, bool) or not 1 <= length <= MAX_EXCERPT:
         raise AccessError("INVALID_ARGUMENT", "length fuera de límite.")
+    filepath, contents = _verified_text(runtime, obj)
+    return {"fuente_id": source_id, "materia_id": obj["materia_id"],
+            "titulo": obj["titulo"], "tipo": obj["tipo"], "eje": obj["eje"],
+            "sha256_texto": obj["sha256_texto"],
+            "origen": obj["origen"], "ruta_texto": str(filepath),
+            "total_caracteres": len(contents), "offset": offset,
+            "devueltos": len(contents[offset:offset+length]),
+            "hay_mas": offset+length < len(contents),
+            "fragmento": contents[offset:offset+length],
+            "index": freshness}
+
+
+def source_text(runtime, source_id, *, subject):
+    """Texto completo y verificado de una fuente de la materia (citas del mapa, S3)."""
+    manifest, _ = _required_index(runtime)
+    return _verified_text(runtime, _source_entry(manifest, source_id, subject))[1]
+
+
+def transcript_segments(text):
+    """Fragmentos de un `transcript.md`: «[HH:MM:SS–HH:MM:SS] texto»; sin tiempos no hay ninguno."""
+    fragments = []
+    for line in text.splitlines():
+        found = TRANSCRIPT_LINE.match(line.strip())
+        if found:
+            fragments.append({"inicio": found[1], "fin": found[2], "texto": found[3]})
+        elif fragments and line.strip():
+            fragments[-1]["texto"] = f'{fragments[-1]["texto"]} {line.strip()}'
+    return fragments
+
+
+def _source_entry(manifest, source_id, subject):
+    obj = manifest["data"]["fuentes"].get(source_id)
+    if obj is None or (subject is not None and obj.get("materia_id") != subject):
+        raise AccessError("NOT_FOUND", "Fuente no registrada para esta materia.")
+    return obj
+
+
+def _verified_text(runtime, obj):
     if obj.get("estado") != "texto" or not obj.get("ruta_texto"):
         raise AccessError("NO_TEXT", "El recurso está catalogado pero no dispone de texto autorizado.",
                           action="Consultar metadatos de la fuente; no inventar su contenido.")
@@ -379,16 +417,7 @@ def source(runtime, source_id, *, subject=None, offset=0, length=3000):
     if not filepath.is_file() or _hash_file(filepath) != obj["sha256_texto"]:
         raise AccessError("SOURCE_CHANGED", "El archivo falta o su SHA ya no coincide.",
                           action="Actualizar fuentes y reconstruir índice.")
-    contents = filepath.read_bytes().decode("utf-8-sig")
-    return {"fuente_id": source_id, "materia_id": obj["materia_id"],
-            "titulo": obj["titulo"], "tipo": obj["tipo"], "eje": obj["eje"],
-            "sha256_texto": obj["sha256_texto"],
-            "origen": obj["origen"], "ruta_texto": str(filepath),
-            "total_caracteres": len(contents), "offset": offset,
-            "devueltos": len(contents[offset:offset+length]),
-            "hay_mas": offset+length < len(contents),
-            "fragmento": contents[offset:offset+length],
-            "index": freshness}
+    return filepath, filepath.read_bytes().decode("utf-8-sig")
 
 
 NOTE_TYPES = records.NOTE_TYPES
@@ -461,3 +490,61 @@ def tracking(runtime, *, subject=None, state=None, limit=50, offset=0):
     items = tracking_items(path, rows, subject=subject, state=state)
     return {"materia_id": subject, "resultado": _paginate(items, limit=limit, offset=offset),
             "workbook_sha256": actual}
+
+
+def subject_map(runtime, subject):
+    """Mapa guardado de la materia (tabla `mapas`); `mapa` es None si aún no hay uno."""
+    _, actual, rows = _records(runtime, "mapas", subject, None, (), "")
+    row = next((r for r in rows if r["materia_id"] == subject), None)
+    if row is None:
+        return {"materia_id": subject, "mapa": None, "actualizado_utc": None, "workbook_sha256": actual}
+    try:
+        content = json.loads(row["contenido"])
+    except ValueError as exc:
+        raise AccessError("INVALID_SOURCE", "El mapa guardado de la materia no es válido.") from exc
+    return {"materia_id": subject, "mapa": content, "actualizado_utc": row["actualizado_utc"],
+            "workbook_sha256": actual}
+
+
+def _class_row(path, class_id):
+    rows = store.read_catalog(path, ("03 - Clases",))["03 - Clases"]
+    row = next((r for r in rows if str(r.get("clase_id")) == class_id), None)
+    if row is None:
+        raise AccessError("NOT_FOUND", "Esa clase no está registrada.")
+    return row
+
+
+def _index_content(row):
+    try:
+        return json.loads(row["contenido"])
+    except ValueError as exc:
+        raise AccessError("INVALID_SOURCE", "El índice guardado de la clase no es válido.") from exc
+
+
+def class_index(runtime, class_id):
+    """Índice guardado de la clase (tabla `indices_clase`); `indice` es None si aún no hay uno."""
+    path, actual, rows = _records(runtime, "indices_clase", None, None, (), "")
+    row = _class_row(path, class_id)
+    saved = next((r for r in rows if r["clase_id"] == class_id), None)
+    return {"clase_id": class_id, "materia_id": str(row["materia_id"]), "titulo": row.get("titulo"),
+            "fecha": _date_text(row.get("fecha")), "indice": _index_content(saved) if saved else None,
+            "actualizado_utc": saved["actualizado_utc"] if saved else None, "workbook_sha256": actual}
+
+
+def class_indexes(runtime, subject):
+    """Clases de la materia que ya tienen índice, de la más reciente a la más antigua."""
+    path, _, rows = _records(runtime, "indices_clase", subject, None, (), "")
+    found = []
+    for row in rows:
+        if row["materia_id"] != subject:
+            continue
+        content, details = _index_content(row), _class_row(path, row["clase_id"])
+        found.append({"clase_id": row["clase_id"], "titulo": details.get("titulo"),
+                      "fecha": _date_text(details.get("fecha")), "temas": len(content["temas"]),
+                      "momentos": sum(len(t["momentos"]) for t in content["temas"])})
+    return sorted(found, key=lambda c: (c["fecha"], c["clase_id"]), reverse=True)
+
+
+def class_transcript(runtime, class_id, subject):
+    """Fragmentos con tiempo de la transcripción de la clase, para abrirla en un minuto."""
+    return transcript_segments(source_text(runtime, f"clase:{class_id}:transcripcion", subject=subject))

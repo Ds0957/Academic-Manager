@@ -22,7 +22,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from canvas_sync.common import SyncError, atomic_json, safe_dir
 
-from . import pages
+from . import assets, pages
 from .server import Handler, Rejected, _same
 
 PORT = 47321
@@ -37,7 +37,8 @@ MAX_FAILURES = 5
 LOCKOUT_SECONDS = 900
 ITERATIONS = 200_000
 
-ALLOWED_GET = {"/panel", "/panel/resumen", "/panel/materias", "/panel/instrucciones"}
+ALLOWED_GET = {"/panel", "/panel/resumen", "/panel/materias", "/panel/instrucciones",
+               *assets.ASSETS}  # scripts fijos de los diagramas del mapa de la materia
 ALLOWED_GET_PREFIXES = ("/panel/materia/", "/panel/publicando/")
 ALLOWED_POST = {"/panel/registrar", "/panel/registrar/aprobar"}
 

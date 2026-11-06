@@ -1,4 +1,4 @@
-"""Tablas propias escritas desde el chat: `seguimiento`, `notas` y `tareas`.
+"""Tablas propias escritas desde el chat: `seguimiento`, `notas`, `tareas`, `mapas` e `indices_clase`.
 
 Son tablas limpias (fechas ISO, marcas de tiempo ISO-8601 UTC, ids de texto) y no forman
 parte de la vista por hojas. Cada lote se aplica en una sola transacción que incrementa
@@ -12,11 +12,14 @@ from pathlib import Path
 from . import store
 from .store import NOTE_TYPES, TASK_STATES, TRACK_STATES  # noqa: F401  (fuente única)
 
-KEYS = {"seguimiento": "actividad_id", "notas": "nota_id", "tareas": "tarea_id"}
+KEYS = {"seguimiento": "actividad_id", "notas": "nota_id", "tareas": "tarea_id", "mapas": "materia_id",
+        "indices_clase": "clase_id"}
 FIELDS = {
     "seguimiento": ("actividad_id", "estado", "nota", "puntos", "comentario"),
     "notas": ("nota_id", "materia_id", "tipo", "texto", "clase_id"),
     "tareas": ("tarea_id", "titulo", "materia_id", "fecha_limite", "detalle", "estado"),
+    "mapas": ("materia_id", "contenido"),
+    "indices_clase": ("clase_id", "materia_id", "contenido"),
 }
 
 
@@ -65,7 +68,7 @@ def apply(db_path, changes):
     Cambios admitidos (dicts):
       {"tabla": "clases", "accion": "celdas", "celdas": [[hoja, fila, columna, antes, después], ...]}
       {"tabla": "notas"|"tareas", "accion": "insertar", "registro": {...}}
-      {"tabla": "seguimiento", "accion": "guardar", "registro": {...}}
+      {"tabla": "seguimiento"|"mapas"|"indices_clase", "accion": "guardar", "registro": {...}}
       {"tabla": "tareas", "accion": "estado", "registro": {"tarea_id": ..., "estado": ...}}
     """
     if not changes:
@@ -89,13 +92,14 @@ def apply(db_path, changes):
                                      f"VALUES ({', '.join('?' for _ in row)})", tuple(row.values()))
                     except sqlite3.IntegrityError as exc:
                         raise store.StoreError(f"Tabla {table}: identificador duplicado.") from exc
-                elif table == "seguimiento" and action == "guardar":
+                elif table in ("seguimiento", "mapas", "indices_clase") and action == "guardar":
                     row = _record(table, change["registro"], FIELDS[table])
                     row["actualizado_utc"] = stamp
-                    updates = ", ".join(f"{k} = excluded.{k}" for k in row if k != "actividad_id")
-                    conn.execute(f"INSERT INTO seguimiento ({', '.join(row)}) "
+                    key = KEYS[table]
+                    updates = ", ".join(f"{k} = excluded.{k}" for k in row if k != key)
+                    conn.execute(f"INSERT INTO {table} ({', '.join(row)}) "
                                  f"VALUES ({', '.join('?' for _ in row)}) "
-                                 f"ON CONFLICT (actividad_id) DO UPDATE SET {updates}",
+                                 f"ON CONFLICT ({key}) DO UPDATE SET {updates}",
                                  tuple(row.values()))
                 elif table == "tareas" and action == "estado":
                     row = _record(table, change["registro"], ("tarea_id", "estado"))
