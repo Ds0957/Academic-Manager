@@ -28,7 +28,7 @@ from capture.sources import drive
 from capture.storage.job import job_lock
 from capture.storage.metadata import atomic_json
 from capture.storage.paths import job_paths
-from . import actions
+from . import actions, chat, class_index
 from .actions import OperationError, _fail
 
 FOLDER = Path("procesamiento") / "claude-capture"
@@ -49,7 +49,7 @@ BUSY = ("Ya hay una clase en proceso en este PC. Consulte «capturas» y vuelva 
         "procesa una a la vez.")
 NOT_STARTED = "Windows no dejó empezar el proceso. Inténtelo otra vez; si sigue igual, pida ayuda."
 UNEXPECTED = "El proceso terminó con un error inesperado. Consulte «capturas» e inténtelo otra vez."
-CAPTURED = "La transcripción está lista. Falta el análisis: use «leer_transcripcion» y luego «completar_clase»."
+CAPTURED = "La transcripción está lista. Falta el índice: use «leer_transcripcion» y luego «completar_clase»."
 
 
 def _folder(runtime):
@@ -236,13 +236,17 @@ def _job_id(job_id):
     return job_id
 
 
-def transcript(runtime, job_id, offset=0, length=12_000):
-    """Trozo de la transcripción de un trabajo, registrado o no."""
+def _transcript_text(runtime, job_id):
     work, _ = job_paths(Path(runtime), _job_id(job_id))
     path = work / "artifacts" / "transcript.md"
     if work.is_symlink() or path.parent.is_symlink() or path.is_symlink() or not path.is_file():
         _fail("NOT_FOUND", "Ese trabajo no tiene transcripción.")
-    text = path.read_text(encoding="utf-8-sig")
+    return path.read_text(encoding="utf-8-sig")
+
+
+def transcript(runtime, job_id, offset=0, length=12_000):
+    """Trozo de la transcripción de un trabajo, registrado o no."""
+    text = _transcript_text(runtime, job_id)
     piece = text[offset:offset + min(length, MAX_READ)]
     following = offset + len(piece)
     return {"trabajo": job_id, "texto": piece, "offset": offset, "siguiente_offset": following,
@@ -253,35 +257,50 @@ def report_name(job_id):
     return f"claude-{job_id}.md"
 
 
-def _store_report(runtime, job_id, analysis):
+def _store_report(runtime, job_id, text):
     folder = Path(runtime) / "procesamiento" / "analysis-review"
     if folder.is_symlink():
         _fail("NOT_FOUND", "La carpeta de informes está redirigida.")
     folder.mkdir(parents=True, exist_ok=True)
     name = report_name(job_id)
     temporary = folder / (name + ".tmp")
-    temporary.write_text(analysis, encoding="utf-8")
+    temporary.write_text(text, encoding="utf-8")
     os.replace(temporary, folder / name)
     return name
 
 
-def complete_preview(runtime, job_id, analysis):
-    """Guarda el borrador del análisis y comprueba la clase; no publica ni registra."""
+def _checked_preview(runtime, job_id, indice):
+    """(vista previa, índice canónico): los minutos se comprueban contra la transcripción del trabajo."""
     runtime = Path(runtime)
     work, _ = job_paths(runtime, _job_id(job_id))
     if work.is_symlink() or not (work / "job.json").is_file():
         _fail("NOT_FOUND", "Ese trabajo no existe. Consulte «capturas».")
-    return actions.preview(runtime, job_id, _store_report(runtime, job_id, analysis))
+    content = class_index.normalize(indice)
+    class_index.check_moments(_transcript_text(runtime, job_id), content)
+    overview = actions.preview(runtime, job_id, _store_report(runtime, job_id, class_index.render(content)))
+    return {**overview, "temas": len(content["temas"]), "momentos": chat._moments(content)}, content
 
 
-def complete_start(runtime, job_id, analysis, *, plan_id, approved, popen=subprocess.Popen, now=time.time):
-    """Con la aprobación de la persona, publica y registra en segundo plano."""
+def complete_preview(runtime, job_id, indice):
+    """Comprueba el índice y la clase; no publica ni registra."""
+    return _checked_preview(runtime, job_id, indice)[0]
+
+
+def complete_start(runtime, job_id, indice, *, plan_id, approved, popen=subprocess.Popen, now=time.time):
+    """Con la aprobación de la persona, publica, registra y guarda el índice en segundo plano."""
     if not approved:
         _approved(plan_id, plan_id, False)
-    current = complete_preview(runtime, job_id, analysis)
+    current, content = _checked_preview(runtime, job_id, indice)
     _approved(plan_id, current["plan_id"], approved)
     return _launch(runtime, {"tipo": "completar", "job_id": job_id, "informe": report_name(job_id),
-                             "plan_id": plan_id}, popen, now)
+                             "plan_id": plan_id, "indice": content}, popen, now)
+
+
+def _save_index(runtime, class_id, content):
+    """Forma parte de lo aprobado en `completar_clase`; la clase ya no depende de este paso."""
+    request = {"clase_id": class_id, "indice": content}
+    plan_id = chat.preview(runtime, "class-index", request)["plan_id"]
+    chat.apply(runtime, "class-index", request, plan_id=plan_id, approved=True)
 
 
 def _work(runtime, order):
@@ -289,10 +308,18 @@ def _work(runtime, order):
     if order["tipo"] == "completar":
         done = actions.complete(runtime, order["job_id"], filename=order["informe"], plan_id=order["plan_id"],
                                 approved=True)
-        text = f"La clase quedó publicada y registrada como {done.get('class_id')}."
+        class_id = done.get("class_id")
+        cause = {}
+        try:
+            _save_index(runtime, class_id, order["indice"])
+            text = f"La clase quedó publicada y registrada como {class_id}, con su índice."
+        except Exception as exc:  # noqa: BLE001 - la clase ya está registrada: se informa cómo terminar
+            cause = {"error_indice": getattr(exc, "code", None) or type(exc).__name__}
+            text = (f"La clase quedó publicada y registrada como {class_id}, pero su índice no se pudo guardar. "
+                    "Vuelva a guardarlo con «guardar_indice_clase».")
         if done.get("warning"):
             text += " " + done["warning"]
-        return {"job_id": order["job_id"], "clase_id": done.get("class_id"), "mensaje": text}
+        return {"job_id": order["job_id"], "clase_id": class_id, "mensaje": text, **cause}
     if order.get("reanuda"):
         job = actions._capture(runtime, "--resume", order["reanuda"])
     else:

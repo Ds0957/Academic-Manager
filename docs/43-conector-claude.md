@@ -29,10 +29,10 @@ Todas son **de solo lectura** salvo `procesar_clase`, `completar_clase`, `guarda
 | `guardar_mapa` | **Escribe.** Guarda el mapa de una materia (`materia`, `mapa`; para guardar, además `plan_id` y `aprobar: true`). |
 | `indice_clase` | Índice guardado de una clase (`clase`): un resumen muy corto y los minutos de cada tema. Sin índice, lo dice y sugiere crearlo. |
 | `guardar_indice_clase` | **Escribe.** Guarda el índice de una clase (`clase`, `indice`; para guardar, además `plan_id` y `aprobar: true`). |
-| `capturas` | Proceso en curso y últimos trabajos de Capture: fase, avance, análisis, publicación y registro (`limite`). |
+| `capturas` | Proceso en curso y últimos trabajos de Capture: fase, avance, publicación y registro (`limite`). |
 | `leer_transcripcion` | Transcripción de un trabajo, por partes, aunque la clase aún no esté registrada (`trabajo`, `offset`, `length`). |
 | `procesar_clase` | **Escribe.** Lanza Capture sobre una grabación de Drive (`enlace`, `materia`, `fecha`; para empezar, además `plan_id` y `aprobar: true`). |
-| `completar_clase` | **Escribe.** Incorpora el análisis, publica y registra la clase (`trabajo`, `analisis`; para empezar, además `plan_id` y `aprobar: true`). |
+| `completar_clase` | **Escribe.** Guarda el índice de la clase, la publica y la registra (`trabajo`, `indice`; para empezar, además `plan_id` y `aprobar: true`). |
 
 ### `procesar_clase` y `completar_clase`: una clase de principio a fin
 
@@ -41,8 +41,10 @@ Claude procesa una clase sin que la persona use comandos:
 1. `procesar_clase` sin `aprobar` consulta Drive y la base, muestra la grabación, la materia y la fecha, y devuelve un `plan_id`. No empieza nada.
 2. Con la aprobación, llama otra vez con ese `plan_id` y `aprobar: true`. Capture corre en un proceso aparte, sin ventana, y sigue aunque se cierre la conversación.
 3. `capturas` muestra el avance. Se procesa una clase a la vez; un trabajo sin terminar de la misma grabación se reanuda.
-4. Con `leer_transcripcion`, Claude lee toda la transcripción y escribe el análisis.
-5. `completar_clase` sin `aprobar` guarda el borrador en `procesamiento/analysis-review` y comprueba la clase. Con la aprobación, corre en segundo plano el mismo `complete` de `academic_operations` ([31](31-operaciones-coordinador.md)).
+4. Con `leer_transcripcion`, Claude lee toda la transcripción y arma el índice por minutos. Es lo único que escribe: no hay un análisis aparte.
+5. `completar_clase` sin `aprobar` comprueba los minutos y las citas contra la transcripción del trabajo, y comprueba la clase. Con la aprobación, corre en segundo plano el `complete` de `academic_operations` ([31](31-operaciones-coordinador.md)) y guarda el índice.
+
+Capture exige un `analysis.md` para publicar, así que ese archivo se genera del índice (`class_index.render`). Las clases registradas antes conservan su análisis; a ellas se les agrega el índice con `guardar_indice_clase`.
 
 Controles (`academic_operations/class_capture.py`):
 
@@ -126,7 +128,7 @@ La misma página trae la tarjeta **Proyectos de Claude**: un cuadro para el Coor
 3. Para registrar entregas, notas, tareas o decisiones, usar Academic Manager: el panel o, cuando existan, las herramientas de escritura del conector, con vista previa y aprobación.
 4. Para estudiar una materia, consultar su `mapa`; si no tiene, ofrecer crearlo con `guardar_mapa` desde el material real, mostrar el resumen y los diagramas y guardarlo solo con aprobación.
 5. Para saber en qué minuto de una clase se habló de algo, consultar `indice_clase`; si no tiene, ofrecer crearlo con `guardar_indice_clase` desde su transcripción y guardarlo solo con aprobación.
-6. Para procesar una clase grabada, usar `procesar_clase`, seguirla con `capturas`, leerla con `leer_transcripcion` y terminar con `completar_clase`, con vista previa y aprobación en cada paso.
+6. Para procesar una clase grabada, usar `procesar_clase`, seguirla con `capturas`, leerla con `leer_transcripcion` y terminar con `completar_clase`, que guarda su índice, sin escribir un análisis aparte, con vista previa y aprobación en cada paso.
 7. Aunque Claude tenga Desktop Commander u otro acceso a los archivos del PC, **nunca** editar directamente los datos, la base de datos ni los archivos de Academic Manager.
 
 Desktop Commander sigue conectado y funcionando igual; estas instrucciones solo evitan que se use para cambiar los datos de Academic Manager por fuera de sus controles.

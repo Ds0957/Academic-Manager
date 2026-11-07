@@ -84,6 +84,18 @@ def check_moments(transcript, content):
                                           "como lo devuelve leer_fuente.")
 
 
+def render(content):
+    """Texto de la clase publicada, generado del índice: Capture exige ese archivo para publicar."""
+    lines = ["# Índice de la clase", "",
+             "Generado del índice por minutos, comprobado contra la transcripción. Los tiempos son los de la "
+             "grabación original.", "", "## De qué trató", "", content["resumen"], ""]
+    for topic in content["temas"]:
+        lines += [f'## {topic["titulo"]}', "", f'Categoría: {topic["categoria"]}', ""]
+        lines += [f'- [{m["inicio"]}] {m["texto"]}: «{m["cita"]}»' for m in topic["momentos"]]
+        lines.append("")
+    return "\n".join(lines)
+
+
 def transcript_of(runtime, subject, class_id):
     """Texto verificado de la transcripción de la clase en el índice de conocimiento."""
     try:

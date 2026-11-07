@@ -521,15 +521,15 @@ def _process(runtime, args):
 
 def _complete(runtime, args):
     from academic_operations import class_capture as cc
-    _half_approval(args, "el mismo «analisis»")
+    _half_approval(args, "el mismo «indice»")
     if args.get("aprobar") is True:
-        started = _operation(lambda: cc.complete_start(runtime, args["trabajo"], args["analisis"],
+        started = _operation(lambda: cc.complete_start(runtime, args["trabajo"], args["indice"],
                                                        plan_id=args["plan_id"], approved=True))
         return {"iniciado": True, **started, "siguiente_paso": "Consulte el resultado con «capturas»."}
-    preview = _operation(lambda: cc.complete_preview(runtime, args["trabajo"], args["analisis"]))
+    preview = _operation(lambda: cc.complete_preview(runtime, args["trabajo"], args["indice"]))
     return {"iniciado": False, **preview,
-            "siguiente_paso": ("Muestre a la persona el análisis y los pasos, y pregúntele si lo publica y registra. "
-                               "Solo si lo aprueba de forma explícita, llame otra vez con el mismo «analisis», este "
+            "siguiente_paso": ("Muestre a la persona el índice y los pasos, y pregúntele si lo publica y registra. "
+                               "Solo si lo aprueba de forma explícita, llame otra vez con el mismo «indice», este "
                                "«plan_id» y aprobar: true.")}
 
 
@@ -557,7 +557,7 @@ PLAN_ARGUMENTS = {"plan_id": {"type": "string", "pattern": PLAN_PATTERN,
 CAPTURE_TOOLS = [
     Tool("capturas", "Clases en proceso",
          "Muestra el proceso en curso y los últimos trabajos de Capture: materia, fecha, fase, avance, y si ya "
-         "tienen análisis y están publicados y registrados. Úsela para seguir «procesar_clase» y para encontrar "
+         "están publicados y registrados. Úsela para seguir «procesar_clase» y para encontrar "
          "clases transcritas que falta completar (database_registered false).",
          _schema({"limite": _integer(1, 100, "Cuántos trabajos mostrar (por defecto 15).")}), _jobs),
     Tool("leer_transcripcion", "Leer la transcripción de un trabajo",
@@ -572,7 +572,8 @@ CAPTURE_TOOLS = [
          "y un «plan_id». Muéstrelo a la persona y solo si ella lo aprueba de forma explícita, llame otra vez "
          "con los mismos datos, ese «plan_id» y aprobar: true. Se procesa una clase a la vez: si hay otra, "
          "espere con «capturas». Al terminar, lea la transcripción con «leer_transcripcion» y siga con "
-         "«completar_clase». Una clase nunca se registra sin ese paso.",
+         "«completar_clase», que guarda el índice por minutos y registra la clase. Una clase nunca se registra "
+         "sin ese paso.",
          _schema({"enlace": {"type": "string", "pattern": DRIVE_LINK_PATTERN,
                              "description": "Enlace de Google Drive de la grabación."},
                   "materia": _subject(),
@@ -581,16 +582,15 @@ CAPTURE_TOOLS = [
                   **PLAN_ARGUMENTS}, ["enlace", "materia", "fecha"]),
          _process, read_only=False),
     Tool("completar_clase", "Completar una clase",
-         "Termina una clase transcrita: incorpora el análisis, la publica en Drive y la registra. Escriba "
-         "«analisis» en Markdown con encabezados, a partir de TODA la transcripción («leer_transcripcion»), sin "
-         "inventar nada y marcando lo que no se entienda. Primero llámela sin «aprobar»: guarda el borrador, "
-         "comprueba la clase y devuelve los pasos y un «plan_id». Muéstrelo a la persona y solo si ella lo "
-         "aprueba de forma explícita, llame otra vez con el mismo «analisis», ese «plan_id» y aprobar: true. "
-         "Corre en segundo plano: consulte el resultado con «capturas».",
-         _schema({"trabajo": _job(),
-                  "analisis": {"type": "string", "maxLength": 1_000_000,
-                               "description": "Análisis completo en Markdown (hasta 1 000 000 de caracteres)."},
-                  **PLAN_ARGUMENTS}, ["trabajo", "analisis"]),
+         "Termina una clase transcrita: guarda su índice por minutos, la publica en Drive y la registra, todo en "
+         "un paso. Lo único que se escribe es el índice: nunca escriba un análisis ni un resumen aparte. Lea TODA "
+         "la transcripción con «leer_transcripcion» y arme «indice» como en «guardar_indice_clase»: un «resumen» "
+         "de 3 a 5 líneas y los temas con sus momentos («inicio», «texto» y «cita» copiados de la transcripción). "
+         "Los minutos y las citas se comprueban. Primero llámela sin «aprobar»: no publica nada y devuelve los "
+         "pasos y un «plan_id». Muestre a la persona el índice y solo si ella lo aprueba de forma explícita, "
+         "llame otra vez con el mismo «indice», ese «plan_id» y aprobar: true. Corre en segundo plano: consulte "
+         "el resultado con «capturas». Para una clase ya registrada use «guardar_indice_clase».",
+         _schema({"trabajo": _job(), "indice": INDEX_SCHEMA, **PLAN_ARGUMENTS}, ["trabajo", "indice"]),
          _complete, read_only=False),
 ]
 

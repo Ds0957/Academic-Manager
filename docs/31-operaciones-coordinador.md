@@ -28,7 +28,7 @@ Contrato completo en [33-escritura-desde-chat.md](33-escritura-desde-chat.md).
 
 ### Desde el conector de Claude (2026-11-06)
 
-`completar_clase` ([43](43-conector-claude.md)) reutiliza `preview` y `complete` sin cambiarlos. Guarda el informe como `claude-<job>.md` en `analysis-review` y corre `complete` en un proceso aparte.
+`completar_clase` ([43](43-conector-claude.md)) reutiliza `preview` y `complete` sin cambiarlos. Genera el informe del índice por minutos, lo guarda como `claude-<job>.md` en `analysis-review`, corre `complete` en un proceso aparte y guarda el índice.
 
 ## Configuración inicial por Desarrollo (una vez por equipo)
 

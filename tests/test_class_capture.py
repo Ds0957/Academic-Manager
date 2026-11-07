@@ -18,7 +18,11 @@ FILE_ID = "1EjemploDeArchivoDeDrive0000000000"
 NAME = " SISTEMAS TRANSACCIONALES - 2026/10/29 20:50 GMT-05:00 - Recording"
 JOB = "a" * 32
 PLAN = "b" * 64
-ANALYSIS = "# Análisis\n\n" + "Contenido revisado de la clase. " * 20
+TRANSCRIPT = "# Transcripción\n\n[00:37:08–00:38:36] La profesora dice que el trabajo del eje tres se entrega en PDF.\n"
+INDICE = {"resumen": "Clase sobre la entrega del eje tres. " * 4,
+          "temas": [{"titulo": "Entrega del Eje 3", "categoria": "instrucciones",
+                     "momentos": [{"inicio": "00:37:08", "texto": "Cómo entregar el trabajo",
+                                   "cita": "el trabajo del eje tres se entrega en PDF"}]}]}
 
 
 class FakeApi:
@@ -60,7 +64,7 @@ class Base(unittest.TestCase):
         self.subject = patcher.start()
         self.addCleanup(patcher.stop)
 
-    def job(self, identity=JOB, status="completed", file_id=FILE_ID, transcript="[00:00:01] Hola clase",
+    def job(self, identity=JOB, status="completed", file_id=FILE_ID, transcript=TRANSCRIPT,
             semester="2026-2", subject="Sistemas Transaccionales", day="2026-10-29"):
         work = self.runtime / "procesamiento" / identity
         (work / "artifacts").mkdir(parents=True)
@@ -257,12 +261,47 @@ class RunnerTests(Base):
         run.assert_not_called()
 
     def test_completes_a_class_with_the_approved_plan(self):
-        self.launch({"tipo": "completar", "job_id": JOB, "informe": cc.report_name(JOB), "plan_id": PLAN})
+        self.launch({"tipo": "completar", "job_id": JOB, "informe": cc.report_name(JOB), "plan_id": PLAN,
+                     "indice": INDICE})
+        request = {"clase_id": "CLS-ST-20261029-01", "indice": INDICE}
         with patch("academic_operations.actions.complete",
-                   return_value={"class_id": "CLS-ST-20261029-01", "warning": None}) as done:
+                   return_value={"class_id": "CLS-ST-20261029-01", "warning": None}) as done, \
+                patch("academic_operations.chat.preview", return_value={"plan_id": "c" * 64}) as preview, \
+                patch("academic_operations.chat.apply") as apply:
             self.assertEqual(cc.run(self.runtime), 0)
         done.assert_called_once_with(self.runtime, JOB, filename=cc.report_name(JOB), plan_id=PLAN, approved=True)
+        preview.assert_called_once_with(self.runtime, "class-index", request)
+        apply.assert_called_once_with(self.runtime, "class-index", request, plan_id="c" * 64, approved=True)
         self.assertEqual((self.state()["estado"], self.state()["clase_id"]), ("listo", "CLS-ST-20261029-01"))
+        self.assertIn("con su índice", self.state()["mensaje"])
+
+    def test_a_failed_index_save_records_its_cause(self):
+        self.launch({"tipo": "completar", "job_id": JOB, "informe": cc.report_name(JOB), "plan_id": PLAN,
+                     "indice": INDICE})
+        with patch("academic_operations.actions.complete", return_value={"class_id": "CLS-ST-20261029-01"}), \
+                patch("academic_operations.chat.preview", side_effect=OperationError("STORE_BUSY", "ocupada")):
+            cc.run(self.runtime)
+        self.assertEqual(self.state()["error_indice"], "STORE_BUSY")
+        self.assertEqual(cc.status(self.runtime)["error_indice"], "STORE_BUSY")
+
+    def test_a_failed_index_save_keeps_the_class_and_says_how_to_finish(self):
+        self.launch({"tipo": "completar", "job_id": JOB, "informe": cc.report_name(JOB), "plan_id": PLAN,
+                     "indice": INDICE})
+        with patch("academic_operations.actions.complete",
+                   return_value={"class_id": "CLS-ST-20261029-01", "warning": None}), \
+                patch("academic_operations.chat.preview", side_effect=OperationError("X", "sin índice de búsqueda")):
+            self.assertEqual(cc.run(self.runtime), 0)
+        self.assertEqual((self.state()["estado"], self.state()["clase_id"]), ("listo", "CLS-ST-20261029-01"))
+        self.assertIn("guardar_indice_clase", self.state()["mensaje"])
+
+    def test_nothing_asks_for_a_separate_analysis_anymore(self):
+        self.assertNotIn("análisis", cc.CAPTURED.casefold())
+        self.assertIn("índice", cc.CAPTURED)
+        for name in ("procesar_clase", "completar_clase"):
+            self.assertIn("índice", tools.TOOLS[name].description)
+        self.assertIn("nunca escriba un análisis", tools.TOOLS["completar_clase"].description)
+        from academic_app import wizard
+        self.assertIn("no escribas un análisis aparte", wizard.CLAUDE_INSTRUCTIONS)
 
 
 class StatusTests(Base):
@@ -338,41 +377,75 @@ class TranscriptTests(Base):
 class CompleteTests(Base):
     OVERVIEW = {"plan_id": PLAN, "materia": "Sistemas Transaccionales", "steps": ["publish"]}
 
+    def report(self):
+        return self.runtime / "procesamiento" / "analysis-review" / cc.report_name(JOB)
+
     def test_preview_of_an_unknown_job_stores_nothing(self):
         with self.assertRaises(OperationError) as caught:
-            cc.complete_preview(self.runtime, JOB, ANALYSIS)
+            cc.complete_preview(self.runtime, JOB, INDICE)
         self.assertEqual(caught.exception.code, "NOT_FOUND")
-        self.assertFalse((self.runtime / "procesamiento" / "analysis-review").exists())
+        self.assertFalse(self.report().exists())
 
-    def test_preview_stores_the_report_and_writes_nothing_else(self):
+    def test_preview_generates_the_published_text_from_the_index(self):
         self.job()
         with patch("academic_operations.actions.preview", return_value=self.OVERVIEW) as preview:
-            result = cc.complete_preview(self.runtime, JOB, ANALYSIS)
+            result = cc.complete_preview(self.runtime, JOB, INDICE)
         preview.assert_called_once_with(self.runtime, JOB, cc.report_name(JOB))
-        self.assertEqual(result, self.OVERVIEW)
-        report = self.runtime / "procesamiento" / "analysis-review" / cc.report_name(JOB)
-        self.assertEqual(report.read_text("utf-8"), ANALYSIS)
+        self.assertEqual((result["plan_id"], result["temas"], result["momentos"]), (PLAN, 1, 1))
+        text = self.report().read_text("utf-8")
+        self.assertIn("# Índice de la clase", text)
+        self.assertIn("## Entrega del Eje 3", text)
+        self.assertIn("[00:37:08] Cómo entregar el trabajo", text)
+
+    def test_the_approved_text_changes_with_the_category_of_a_topic(self):
+        self.job()
+        other = {**INDICE, "temas": [{**INDICE["temas"][0], "categoria": "tareas"}]}
+        with patch("academic_operations.actions.preview", return_value=self.OVERVIEW):
+            cc.complete_preview(self.runtime, JOB, INDICE)
+            first = self.report().read_text("utf-8")
+            cc.complete_preview(self.runtime, JOB, other)
+        self.assertNotEqual(first, self.report().read_text("utf-8"))
+        self.assertIn("Categoría: instrucciones", first)
+
+    def test_the_generated_text_passes_the_report_contract_even_when_short(self):
+        self.job()
+        small = {"resumen": "Clase corta.", "temas": INDICE["temas"]}
+        with patch("academic_operations.actions.preview", return_value=self.OVERVIEW):
+            cc.complete_preview(self.runtime, JOB, small)
+        self.assertGreaterEqual(len(self.report().read_text("utf-8").strip()), 200)
+
+    def test_preview_refuses_a_minute_that_is_not_in_the_transcript(self):
+        self.job()
+        wrong = {"resumen": "Clase.", "temas": [{"titulo": "Tema", "momentos": [
+            {"inicio": "00:99:08", "texto": "x", "cita": "el trabajo del eje tres"}]}]}
+        for indice in (wrong, {"resumen": "Clase.", "temas": [{"titulo": "Tema", "momentos": [
+                {"inicio": "00:37:08", "texto": "x", "cita": "una cita que nunca se dijo"}]}]}):
+            with self.subTest(), self.assertRaises(OperationError):
+                cc.complete_preview(self.runtime, JOB, indice)
+        self.assertFalse(self.report().exists())
 
     def test_start_needs_approval_and_the_same_plan(self):
         self.job()
         popen = Popen()
         with patch("academic_operations.actions.preview", return_value=self.OVERVIEW):
             with self.assertRaises(OperationError) as refused:
-                cc.complete_start(self.runtime, JOB, ANALYSIS, plan_id=PLAN, approved=False, popen=popen)
+                cc.complete_start(self.runtime, JOB, INDICE, plan_id=PLAN, approved=False, popen=popen)
             with self.assertRaises(OperationError) as changed:
-                cc.complete_start(self.runtime, JOB, ANALYSIS, plan_id="c" * 64, approved=True, popen=popen)
+                cc.complete_start(self.runtime, JOB, INDICE, plan_id="c" * 64, approved=True, popen=popen)
         self.assertEqual((refused.exception.code, changed.exception.code), ("APPROVAL_REQUIRED", "PLAN_CHANGED"))
         self.assertEqual(popen.calls, [])
 
-    def test_start_launches_the_existing_completion_in_the_background(self):
+    def test_start_launches_the_completion_with_the_normalized_index(self):
         self.job()
         popen = Popen()
         with patch("academic_operations.actions.preview", return_value=self.OVERVIEW):
-            result = cc.complete_start(self.runtime, JOB, ANALYSIS, plan_id=PLAN, approved=True, popen=popen)
+            result = cc.complete_start(self.runtime, JOB, INDICE, plan_id=PLAN, approved=True, popen=popen)
         self.assertEqual(result["estado"], "lanzada")
         self.assertEqual(len(popen.calls), 1)
-        self.assertEqual(self.state()["pedido"],
-                         {"tipo": "completar", "job_id": JOB, "informe": cc.report_name(JOB), "plan_id": PLAN})
+        order = self.state()["pedido"]
+        self.assertEqual((order["tipo"], order["job_id"], order["informe"], order["plan_id"]),
+                         ("completar", JOB, cc.report_name(JOB), PLAN))
+        self.assertEqual(order["indice"]["temas"][0]["categoria"], "instrucciones")
 
 
 class ToolTests(Base):
@@ -437,22 +510,21 @@ class ToolTests(Base):
     def test_complete_without_approval_only_previews(self):
         with patch.object(cc, "complete_preview", return_value={"plan_id": PLAN, "steps": []}) as preview, \
                 patch.object(cc, "complete_start") as start:
-            result = tools.call("completar_clase", {"trabajo": JOB, "analisis": ANALYSIS}, self.runtime)
-        preview.assert_called_once_with(self.runtime, JOB, ANALYSIS)
+            result = tools.call("completar_clase", {"trabajo": JOB, "indice": INDICE}, self.runtime)
+        preview.assert_called_once_with(self.runtime, JOB, INDICE)
         start.assert_not_called()
         self.assertEqual((result["iniciado"], result["plan_id"]), (False, PLAN))
 
-    def test_a_full_class_analysis_is_accepted(self):
-        long_text = "# Análisis\n\n" + "x" * 200_000
-        with patch.object(cc, "complete_preview", return_value={"plan_id": PLAN}) as preview:
-            tools.call("completar_clase", {"trabajo": JOB, "analisis": long_text}, self.runtime)
-        preview.assert_called_once_with(self.runtime, JOB, long_text)
+    def test_the_old_analysis_argument_is_gone(self):
+        with patch.object(cc, "complete_preview") as preview, self.assertRaises(ToolError):
+            tools.call("completar_clase", {"trabajo": JOB, "analisis": "# Texto"}, self.runtime)
+        preview.assert_not_called()
 
     def test_complete_with_approval_starts(self):
         with patch.object(cc, "complete_start", return_value={"estado": "lanzada"}) as start:
-            tools.call("completar_clase", {"trabajo": JOB, "analisis": ANALYSIS, "plan_id": PLAN, "aprobar": True},
+            tools.call("completar_clase", {"trabajo": JOB, "indice": INDICE, "plan_id": PLAN, "aprobar": True},
                        self.runtime)
-        start.assert_called_once_with(self.runtime, JOB, ANALYSIS, plan_id=PLAN, approved=True)
+        start.assert_called_once_with(self.runtime, JOB, INDICE, plan_id=PLAN, approved=True)
 
 
 class SubjectTests(unittest.TestCase):
