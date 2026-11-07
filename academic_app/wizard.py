@@ -1888,7 +1888,10 @@ CLAUDE_INSTRUCTIONS = (
     "partir del material real, muéstrame el resumen y los diagramas y guárdalo solo si lo apruebo.\n"
     "5. Para saber en qué minuto de una clase se habló de algo, consulta indice_clase. Si no tiene, ofréceme "
     "crearlo con guardar_indice_clase a partir de su transcripción y guárdalo solo si lo apruebo.\n"
-    "6. Aunque tengas Desktop Commander u otro acceso a los archivos del PC, nunca edites directamente los "
+    "6. Para procesar una clase grabada, usa procesar_clase con su enlace de Google Drive, sigue el avance con "
+    "capturas, lee la transcripción con leer_transcripcion y termina con completar_clase. No me digas que lo "
+    "haga yo: muéstrame la vista previa de cada paso y sigue solo si lo apruebo.\n"
+    "7. Aunque tengas Desktop Commander u otro acceso a los archivos del PC, nunca edites directamente los "
     "datos, la base de datos ni los archivos de Academic Manager.")
 CLAUDE_PROJECTS = ("Cree un proyecto en Claude para el Coordinador y otro por materia: cada proyecto tiene su "
                    "propia memoria, así que las materias no se mezclan. En cada uno, abra el engranaje → Memory → "

@@ -26,6 +26,10 @@ La solución no consiste en eludir el control de herramientas ni en permitir com
 
 Contrato completo en [33-escritura-desde-chat.md](33-escritura-desde-chat.md).
 
+### Desde el conector de Claude (2026-11-06)
+
+`completar_clase` ([43](43-conector-claude.md)) reutiliza `preview` y `complete` sin cambiarlos. Guarda el informe como `claude-<job>.md` en `analysis-review` y corre `complete` en un proceso aparte.
+
 ## Configuración inicial por Desarrollo (una vez por equipo)
 
 Archivo local `C:\AcademicManagerData\control\academic-operations.json`, no versionado y sin credenciales:

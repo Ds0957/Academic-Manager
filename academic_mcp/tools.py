@@ -481,6 +481,120 @@ INDEX_TOOLS = [
 ]
 
 
+# --- process a class from Claude (odd/tasks/capture-desde-claude.md) ------------------------
+JOB_ID_PATTERN = r"^[0-9a-f]{32}$"
+DRIVE_LINK_PATTERN = r"^https://(drive|docs)\.google\.com/\S{1,300}$"
+DATE_PATTERN = r"^\d{4}-\d{2}-\d{2}$"
+
+
+def _operation(step):
+    """Runs one step; these messages are already plain and carry no paths."""
+    try:
+        return step()
+    except OperationError as exc:
+        raise ToolError(str(exc)) from None
+
+
+def _half_approval(args, argument):
+    if args.get("aprobar") is True and "plan_id" not in args:
+        raise ToolError("Para empezar indique el «plan_id» de la vista previa junto con aprobar: true.")
+    if args.get("aprobar") is not True and ("plan_id" in args or "aprobar" in args):
+        raise ToolError(f"Para empezar, llame con {argument}, su «plan_id» y aprobar: true; sin ellos solo se "
+                        "genera la vista previa.")
+
+
+def _process(runtime, args):
+    from academic_operations import class_capture as cc
+    _half_approval(args, "el mismo enlace, materia y fecha")
+    target = (runtime, args["enlace"], args["materia"], args["fecha"])
+    if args.get("aprobar") is True:
+        started = _operation(lambda: cc.start(*target, plan_id=args["plan_id"], approved=True))
+        return {"iniciado": True, **started,
+                "siguiente_paso": ("Capture sigue en este PC aunque se cierre la conversación. Consulte el avance "
+                                   "con «capturas»; la grabación se transcribe en varios minutos.")}
+    preview = _operation(lambda: cc.plan(*target))
+    return {"iniciado": False, **preview,
+            "siguiente_paso": ("Muestre a la persona la grabación, la materia y la fecha y pregúntele si la procesa. "
+                               "Solo si lo aprueba de forma explícita, llame otra vez con los mismos datos, este "
+                               "«plan_id» y aprobar: true.")}
+
+
+def _complete(runtime, args):
+    from academic_operations import class_capture as cc
+    _half_approval(args, "el mismo «analisis»")
+    if args.get("aprobar") is True:
+        started = _operation(lambda: cc.complete_start(runtime, args["trabajo"], args["analisis"],
+                                                       plan_id=args["plan_id"], approved=True))
+        return {"iniciado": True, **started, "siguiente_paso": "Consulte el resultado con «capturas»."}
+    preview = _operation(lambda: cc.complete_preview(runtime, args["trabajo"], args["analisis"]))
+    return {"iniciado": False, **preview,
+            "siguiente_paso": ("Muestre a la persona el análisis y los pasos, y pregúntele si lo publica y registra. "
+                               "Solo si lo aprueba de forma explícita, llame otra vez con el mismo «analisis», este "
+                               "«plan_id» y aprobar: true.")}
+
+
+def _jobs(runtime, args):
+    from academic_operations import class_capture as cc
+    return {"en_curso": cc.status(runtime),
+            "trabajos": core.capture_jobs(runtime, limit=args.get("limite", 15))["trabajos"]}
+
+
+def _read_transcript(runtime, args):
+    from academic_operations import class_capture as cc
+    return _operation(lambda: cc.transcript(runtime, args["trabajo"], offset=args.get("offset", 0),
+                                            length=args.get("length", 12_000)))
+
+
+def _job(text="Identificador del trabajo, como lo devuelve «capturas»."):
+    return {"type": "string", "pattern": JOB_ID_PATTERN, "description": text}
+
+
+PLAN_ARGUMENTS = {"plan_id": {"type": "string", "pattern": PLAN_PATTERN,
+                              "description": "«plan_id» que devolvió la vista previa (solo para empezar)."},
+                  "aprobar": {"type": "boolean",
+                              "description": "true solo cuando la persona aprobó de forma explícita."}}
+
+CAPTURE_TOOLS = [
+    Tool("capturas", "Clases en proceso",
+         "Muestra el proceso en curso y los últimos trabajos de Capture: materia, fecha, fase, avance, y si ya "
+         "tienen análisis y están publicados y registrados. Úsela para seguir «procesar_clase» y para encontrar "
+         "clases transcritas que falta completar (database_registered false).",
+         _schema({"limite": _integer(1, 100, "Cuántos trabajos mostrar (por defecto 15).")}), _jobs),
+    Tool("leer_transcripcion", "Leer la transcripción de un trabajo",
+         "Lee por partes la transcripción de un trabajo de Capture, aunque la clase aún no esté registrada. "
+         "Siga con «siguiente_offset» hasta que «hay_mas» sea false.",
+         _schema({"trabajo": _job(), "offset": _integer(0, 100_000_000, "Carácter desde el que leer."),
+                  "length": _integer(1, 20_000, "Cuántos caracteres leer (por defecto 12000).")}, ["trabajo"]),
+         _read_transcript),
+    Tool("procesar_clase", "Procesar una clase",
+         "Procesa una grabación de clase de Google Drive con Capture: la descarga y la transcribe en este PC, en "
+         "un proceso aparte. Primero llámela sin «aprobar»: no empieza nada y devuelve la grabación, la materia "
+         "y un «plan_id». Muéstrelo a la persona y solo si ella lo aprueba de forma explícita, llame otra vez "
+         "con los mismos datos, ese «plan_id» y aprobar: true. Se procesa una clase a la vez: si hay otra, "
+         "espere con «capturas». Al terminar, lea la transcripción con «leer_transcripcion» y siga con "
+         "«completar_clase». Una clase nunca se registra sin ese paso.",
+         _schema({"enlace": {"type": "string", "pattern": DRIVE_LINK_PATTERN,
+                             "description": "Enlace de Google Drive de la grabación."},
+                  "materia": _subject(),
+                  "fecha": {"type": "string", "pattern": DATE_PATTERN,
+                            "description": "Fecha de la clase, YYYY-MM-DD, según la grabación o la persona."},
+                  **PLAN_ARGUMENTS}, ["enlace", "materia", "fecha"]),
+         _process, read_only=False),
+    Tool("completar_clase", "Completar una clase",
+         "Termina una clase transcrita: incorpora el análisis, la publica en Drive y la registra. Escriba "
+         "«analisis» en Markdown con encabezados, a partir de TODA la transcripción («leer_transcripcion»), sin "
+         "inventar nada y marcando lo que no se entienda. Primero llámela sin «aprobar»: guarda el borrador, "
+         "comprueba la clase y devuelve los pasos y un «plan_id». Muéstrelo a la persona y solo si ella lo "
+         "aprueba de forma explícita, llame otra vez con el mismo «analisis», ese «plan_id» y aprobar: true. "
+         "Corre en segundo plano: consulte el resultado con «capturas».",
+         _schema({"trabajo": _job(),
+                  "analisis": {"type": "string", "maxLength": 1_000_000,
+                               "description": "Análisis completo en Markdown (hasta 1 000 000 de caracteres)."},
+                  **PLAN_ARGUMENTS}, ["trabajo", "analisis"]),
+         _complete, read_only=False),
+]
+
+
 def _without_local_path(found):
     """Claude cites by «fuente_id»; the text file's absolute path on this PC is not needed."""
     if isinstance(found, dict):
@@ -488,7 +602,7 @@ def _without_local_path(found):
     return found
 
 
-TOOLS = {tool.name: tool for tool in [*_TOOLS, *MAP_TOOLS, *INDEX_TOOLS]}
+TOOLS = {tool.name: tool for tool in [*_TOOLS, *MAP_TOOLS, *INDEX_TOOLS, *CAPTURE_TOOLS]}
 
 
 def call(name, arguments, runtime):
