@@ -91,7 +91,9 @@ def render(content):
              "grabación original.", "", "## De qué trató", "", content["resumen"], ""]
     for topic in content["temas"]:
         lines += [f'## {topic["titulo"]}', "", f'Categoría: {topic["categoria"]}', ""]
-        lines += [f'- [{m["inicio"]}] {m["texto"]}: «{m["cita"]}»' for m in topic["momentos"]]
+        # La cita va en su propia línea: así no se junta con la puntuación del texto («días.: «…»»).
+        for moment in topic["momentos"]:
+            lines += [f'- [{moment["inicio"]}] {moment["texto"]}', f'  «{moment["cita"]}»']
         lines.append("")
     return "\n".join(lines)
 

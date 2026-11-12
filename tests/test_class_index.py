@@ -240,3 +240,18 @@ class ClassIndexCliTests(ClassIndexFixture):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RenderPunctuationTest(unittest.TestCase):
+    """El texto publicado nunca junta la puntuación del momento con la de la cita (`días.: «…»`)."""
+
+    def test_quote_goes_on_its_own_line_whatever_the_moment_ends_with(self):
+        endings = ["Retomar la columna.", "¿Puede agotarse la empatía?", "¡Atención!", "Definición:",
+                   "Ejemplos…", "Sin puntuación"]
+        content = {"resumen": "Resumen.", "temas": [{"titulo": "Tema", "categoria": "tema", "momentos": [
+            {"inicio": f"00:0{i}:00", "texto": text, "cita": f"cita {i}"} for i, text in enumerate(endings)]}]}
+        lines = class_index.render(content).split("\n")
+        for i, text in enumerate(endings):
+            at = lines.index(f"- [00:0{i}:00] {text}")
+            self.assertEqual(lines[at + 1], f"  «cita {i}»")
+        self.assertNotRegex(class_index.render(content), r"[.?!:…]\s*:\s*«")
