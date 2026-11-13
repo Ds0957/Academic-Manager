@@ -52,6 +52,8 @@ button { font:inherit; font-weight:600; padding:9px 18px; border-radius:9px; bor
          background:var(--accent); color:var(--on-accent); cursor:pointer; margin-top:12px; }
 button:hover { filter:brightness(1.08); }
 button.secondary { background:transparent; color:var(--accent); }
+a.marcador { display:inline-block; font-weight:600; padding:9px 18px; border-radius:9px; border:1px solid var(--accent);
+             background:var(--accent); color:var(--on-accent); text-decoration:none; cursor:grab; }
 ol li, ul li { margin: 6px 0; }
 pre { white-space: pre-wrap; background:var(--soft); padding:12px; border-radius:9px; }
 table { border-collapse: collapse; width:100%; } td, th { text-align:left; padding:6px 4px;

@@ -110,6 +110,14 @@ def _check(schema, arguments):
         elif rule["type"] == "object":
             if not isinstance(value, dict):
                 raise ToolError(f"«{name}» debe ser un objeto JSON.")
+        elif rule["type"] == "array":
+            items = rule["items"]
+            if not isinstance(value, list) or not rule["minItems"] <= len(value) <= rule["maxItems"]:
+                raise ToolError(f"«{name}» debe ser una lista de {rule['minItems']} a {rule['maxItems']} elementos.")
+            if any(not isinstance(item, str) or not items["minLength"] <= len(item) <= items["maxLength"]
+                   for item in value):
+                raise ToolError(f"Cada elemento de «{name}» debe ser un texto de {items['minLength']} a "
+                                f"{items['maxLength']} caracteres.")
         elif not isinstance(value, str):
             raise ToolError(f"«{name}» debe ser texto.")
         elif "enum" in rule and value not in rule["enum"]:
@@ -533,6 +541,28 @@ def _complete(runtime, args):
                                "«plan_id» y aprobar: true.")}
 
 
+def _downloaded(runtime, args):
+    from academic_operations import class_capture as cc
+    return cc.downloaded(runtime)
+
+
+def _import(runtime, args):
+    from academic_operations import class_capture as cc
+    _half_approval(args, "los mismos archivos y materia")
+    target = (runtime, args["archivos"], args["materia"])
+    if args.get("aprobar") is True:
+        started = _operation(lambda: cc.import_start(*target, plan_id=args["plan_id"], approved=True))
+        return {"iniciado": True, **started,
+                "siguiente_paso": ("Importar tarda unos segundos por clase. Consulte el resultado con «capturas»; "
+                                   "después lea cada transcripción con «leer_transcripcion» y termine cada clase "
+                                   "con «completar_clase».")}
+    preview = _operation(lambda: cc.import_plan(*target))
+    return {"iniciado": False, **preview,
+            "siguiente_paso": ("Muestre a la persona las clases (fecha, grabación y duración) y la materia, y "
+                               "pregúntele si las importa. Solo si lo aprueba de forma explícita, llame otra vez "
+                               "con los mismos archivos y materia, este «plan_id» y aprobar: true.")}
+
+
 def _jobs(runtime, args):
     from academic_operations import class_capture as cc
     return {"en_curso": cc.status(runtime),
@@ -581,6 +611,25 @@ CAPTURE_TOOLS = [
                             "description": "Fecha de la clase, YYYY-MM-DD, según la grabación o la persona."},
                   **PLAN_ARGUMENTS}, ["enlace", "materia", "fecha"]),
          _process, read_only=False),
+    Tool("transcripciones_descargadas", "Transcripciones descargadas",
+         "Lista las transcripciones .vtt que la persona descargó con el botón «Transcripción de Drive» (sirve "
+         "para las grabaciones que no se pueden descargar, como las de inglés): archivo, grabación, fecha, "
+         "enlace de la grabación y si ya está procesada. Para crear las clases, use «importar_transcripciones».",
+         _schema(), _downloaded),
+    Tool("importar_transcripciones", "Importar transcripciones descargadas",
+         "Crea clases a partir de transcripciones .vtt de Descargas (las de «transcripciones_descargadas»), "
+         "sin descargar ni transcribir el video. Varias de una vez, todas de la misma materia. Primero llámela "
+         "sin «aprobar»: no escribe nada y devuelve las clases y un «plan_id». Muéstrelas a la persona y solo si "
+         "ella lo aprueba de forma explícita, llame otra vez con los mismos datos, ese «plan_id» y aprobar: true. "
+         "Cada clase queda transcrita y sin índice: siga como con «procesar_clase», con «leer_transcripcion» y "
+         "«completar_clase». Si la clase es en otro idioma, escriba el índice en español y copie las citas tal "
+         "como están en la transcripción.",
+         _schema({"archivos": {"type": "array", "minItems": 1, "maxItems": 15,
+                               "items": {"type": "string", "minLength": 5, "maxLength": 250},
+                               "description": "Nombres exactos de los archivos .vtt, como los devuelve "
+                                              "«transcripciones_descargadas»."},
+                  "materia": _subject(), **PLAN_ARGUMENTS}, ["archivos", "materia"]),
+         _import, read_only=False),
     Tool("completar_clase", "Completar una clase",
          "Termina una clase transcrita: guarda su índice por minutos, la publica en Drive y la registra, todo en "
          "un paso. Lo único que se escribe es el índice: nunca escriba un análisis ni un resumen aparte. Lea TODA "

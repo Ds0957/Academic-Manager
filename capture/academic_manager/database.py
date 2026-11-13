@@ -123,7 +123,7 @@ def build_class_record(job, subject_id):
         "transcripcion": (relative / "transcript.md").as_posix(),
         "analisis": (relative / "analysis.md").as_posix(),
         "procesada": True,
-        "fuente": "Google Drive" if source.get("kind") == "drive" else "archivo local",
+        "fuente": "Google Drive" if source.get("kind") == "drive" or source.get("file_id") else "archivo local",
         "verificacion": "Grabación completa procesada con Capture V0; transcripción y análisis publicados y validados por SHA-256.",
         "notas": notes,
     }

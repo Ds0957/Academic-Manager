@@ -211,6 +211,164 @@ def _launch(runtime, order, popen, now):
     return {"estado": state["estado"], "inicio": state["inicio"]}
 
 
+# --- clases desde la transcripción del reproductor de Drive (odd/tasks/transcripcion-ingles.md) -----
+VTT_MAX_BYTES = 5 * 1024 * 1024  # una clase de hora y media pesa unos 350 KB
+MAX_IMPORT = 15
+IMPORTED = Path("procesamiento") / "transcripciones-importadas"
+RECORDING_CODE = re.compile(r"\s*\[([-A-Za-z0-9_]{20,})\]$")
+NO_CODE = ("No trae el código de la grabación: descárguela otra vez con el botón «Transcripción de Drive» "
+           "(Academic Manager → «Configuración» → «Claude»).")
+IMPORTED_TEXT = "Falta el índice de cada una: use «leer_transcripcion» y luego «completar_clase»."
+
+
+def downloads_folder():
+    """La carpeta Descargas de la persona (en Windows, la que tenga configurada)."""
+    if os.name == "nt":
+        try:
+            import ctypes
+            from ctypes import wintypes
+            guid = (ctypes.c_byte * 16).from_buffer_copy(
+                bytes.fromhex("90E24D373F126545916439C4925E467B"))  # FOLDERID_Downloads
+            found = ctypes.c_wchar_p()
+            if ctypes.windll.shell32.SHGetKnownFolderPath(guid, 0, None, ctypes.byref(found)) == 0:
+                path = Path(found.value)
+                ctypes.windll.ole32.CoTaskMemFree(found)
+                return path
+        except (OSError, AttributeError, ValueError):
+            pass
+    return Path.home() / "Downloads"
+
+
+def _vtt_names(folder):
+    folder = Path(folder)
+    if folder.is_symlink() or not folder.is_dir():
+        return []
+    return [p for p in folder.iterdir() if p.suffix.lower() == ".vtt" and p.is_file() and not p.is_symlink()]
+
+
+def _describe(path):
+    """Grabación, fecha y enlace que dice el nombre que pone el botón: «<título> [<código>].vtt»."""
+    stem = path.stem
+    code = RECORDING_CODE.search(stem)
+    recording = RECORDING_CODE.sub("", stem).strip()
+    named = re.search(r"(20\d{2})[/_-](\d{2})[/_-](\d{2})", recording)
+    day = "-".join(named.groups()) if named else None
+    try:
+        date.fromisoformat(day or "")
+    except ValueError:
+        day = None
+    link = f"https://drive.google.com/file/d/{code.group(1)}/view" if code else None
+    return {"archivo": path.name, "grabacion": recording, "fecha": day, "enlace": link,
+            "file_id": code.group(1) if code else None}
+
+
+def downloaded(runtime, *, folder=None):
+    """Transcripciones .vtt en Descargas, de la clase más reciente a la más antigua; no escribe nada."""
+    items = []
+    found = [_describe(path) for path in _vtt_names(folder or downloads_folder())]
+    for item in sorted(found, key=lambda i: (i["fecha"] or "", i["archivo"]), reverse=True)[:50]:
+        previous = _previous_job(runtime, item["file_id"]) if item["file_id"] else None
+        item["ya_procesada"] = previous.get("job_id") if previous and previous.get("status") == "completed" else None
+        if not item["enlace"]:
+            item["aviso"] = NO_CODE
+        items.append({k: v for k, v in item.items() if k != "file_id"})
+    return {"archivos": items}
+
+
+def _import_item(runtime, folder, name):
+    if not isinstance(name, str) or not name.lower().endswith(".vtt") or any(c in name for c in "/\\:") \
+            or name in (".", ".."):
+        _fail("INVALID_ARGUMENT", "Indique el nombre de un archivo .vtt de Descargas, tal como lo muestra "
+                                  "«transcripciones_descargadas».")
+    path = Path(folder) / name
+    if Path(folder).is_symlink() or path.is_symlink() or not path.is_file():
+        _fail("NOT_FOUND", f"No está en Descargas: {name}. Consulte «transcripciones_descargadas».")
+    if path.stat().st_size > VTT_MAX_BYTES:
+        _fail("INVALID_TRANSCRIPT", f"{name} es demasiado grande para ser una transcripción.")
+    item = _describe(path)
+    if not item["enlace"]:
+        _fail("NO_RECORDING_LINK", f"{name}: {NO_CODE}")
+    if not item["fecha"]:
+        _fail("NO_DATE", f"{name} no dice la fecha de la clase en el nombre.")
+    data = path.read_bytes()
+    from capture.transcription.formatter import import_vtt
+    try:
+        segments = import_vtt(data.decode("utf-8-sig"))["segments"]
+    except (CaptureError, UnicodeError):
+        _fail("INVALID_TRANSCRIPT", f"{name} no es una transcripción con tiempos.")
+    previous = _previous_job(runtime, item["file_id"])
+    if previous and previous.get("status") == "completed":
+        _fail("ALREADY_PROCESSED", f"Esa grabación ya está procesada (trabajo {previous.get('job_id')}): {name}. "
+                                   "Consulte «capturas»; si falta registrarla, use «completar_clase».")
+    return {**{k: v for k, v in item.items() if k != "file_id"}, "fragmentos": len(segments),
+            "minutos": round(segments[-1]["end"] / 60), "sha256": hashlib.sha256(data).hexdigest()}
+
+
+def import_plan(runtime, files, subject_id, *, folder=None):
+    """Vista previa de crear clases desde transcripciones de Descargas; no escribe nada."""
+    if not isinstance(files, list) or not 1 <= len(files) <= MAX_IMPORT or len(set(files)) != len(files):
+        _fail("INVALID_ARGUMENT", f"Indique de 1 a {MAX_IMPORT} archivos distintos.")
+    folder = folder or downloads_folder()
+    subject, semester = _subject(runtime, subject_id)
+    classes = [_import_item(runtime, folder, name) for name in files]
+    fields = {"materia": subject, "materia_id": subject_id, "semestre": semester, "clases": classes}
+    digest = hashlib.sha256(json.dumps(fields, ensure_ascii=True, sort_keys=True).encode("utf-8")).hexdigest()
+    return {**fields, "plan_id": digest}
+
+
+def import_start(runtime, files, subject_id, *, plan_id, approved, folder=None, popen=subprocess.Popen,
+                 now=time.time):
+    """Con la aprobación de la persona, guarda una copia de cada archivo y las importa en segundo plano."""
+    if not approved:
+        _approved(plan_id, plan_id, False)
+    folder = folder or downloads_folder()
+    current = import_plan(runtime, files, subject_id, folder=folder)
+    _approved(plan_id, current["plan_id"], approved)
+    copies = Path(runtime) / IMPORTED
+    if copies.is_symlink():
+        _fail("NOT_FOUND", "La carpeta de transcripciones importadas está redirigida.")
+    copies.mkdir(parents=True, exist_ok=True)
+    order = []
+    for item in current["clases"]:
+        source = Path(folder) / item["archivo"]
+        data = b""
+        if not source.is_symlink() and source.is_file():
+            with source.open("rb") as stream:
+                data = stream.read(VTT_MAX_BYTES + 1)  # lo aprobado cabe en el tope; un cambio no se lee entero
+        if hashlib.sha256(data).hexdigest() != item["sha256"]:
+            _fail("PLAN_CHANGED", "Un archivo cambió desde la vista previa. Pida una vista previa nueva y vuelva "
+                                  "a pedir aprobación.")
+        copy = copies / f"{item['sha256']}.vtt"
+        if not copy.is_file() or hashlib.sha256(copy.read_bytes()).hexdigest() != item["sha256"]:
+            temporary = copy.with_name(copy.name + ".tmp")
+            temporary.write_bytes(data)
+            os.replace(temporary, copy)
+        order.append({"archivo": item["archivo"], "ruta": str(copy), "fecha": item["fecha"],
+                      "grabacion": item["grabacion"], "enlace": item["enlace"]})
+    return _launch(runtime, {"tipo": "importar", "semestre": current["semestre"], "materia": current["materia"],
+                             "clases": order}, popen, now)
+
+
+def _import(runtime, order):
+    done = []
+    for item in order["clases"]:
+        try:
+            job = actions._capture(runtime, "--transcript=" + item["ruta"], "--semester=" + order["semestre"],
+                                   "--subject=" + order["materia"], "--class-date=" + item["fecha"],
+                                   "--recording-name=" + item["grabacion"], "--recording-url=" + item["enlace"])
+            done.append({"archivo": item["archivo"], "job_id": job["job_id"]})
+        except (OperationError, CaptureError) as exc:
+            done.append({"archivo": item["archivo"], "error": str(exc)})
+    good = [d for d in done if "job_id" in d]
+    if not good:
+        raise CaptureError("No se pudo importar ninguna: " + " ".join(f"{d['archivo']}: {d['error']}" for d in done))
+    text = f"Se importaron {len(good)} de {len(done)} clases. {IMPORTED_TEXT}"
+    failed = [f"{d['archivo']}: {d['error']}" for d in done if "error" in d]
+    if failed:
+        text += " No se pudo importar: " + " ".join(failed)
+    return {"trabajos": done, "mensaje": text}
+
+
 def _approved(plan_id, expected, approved):
     if not approved:
         _fail("APPROVAL_REQUIRED", "Empezar requiere la aprobación explícita de la persona.")
@@ -305,6 +463,8 @@ def _save_index(runtime, class_id, content):
 
 def _work(runtime, order):
     """Hace el pedido guardado y devuelve los campos del resultado."""
+    if order["tipo"] == "importar":
+        return _import(runtime, order)
     if order["tipo"] == "completar":
         done = actions.complete(runtime, order["job_id"], filename=order["informe"], plan_id=order["plan_id"],
                                 approved=True)

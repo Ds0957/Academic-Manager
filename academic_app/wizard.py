@@ -29,7 +29,7 @@ from pathlib import Path
 
 from academic_config import paths
 
-from . import assets, class_page, claude_desktop, forms, map_page, panel, registrar
+from . import assets, class_page, claude_desktop, drive_button, forms, map_page, panel, registrar
 from .pages import Response, badge, csrf_field, esc, layout, notice
 
 SEMESTER = re.compile(r"20\d{2}-[1-3]")
@@ -1775,7 +1775,7 @@ class Wizard:
         card += "</div>"
         failed = bool(error) or key == claude_desktop.UNREADABLE
         body = (head + CLAUDE_INTRO + card + self._claude_manual(runtime, state["ruta"], failed)
-                + self._claude_projects(runtime))
+                + self._claude_projects(runtime) + drive_button.card(panel.copy_box))
         return Response(status, layout("Claude Desktop", body))
 
     def _claude_projects(self, runtime):

@@ -22,9 +22,9 @@ RUNTIME = Path("/runtime-que-no-existe")
 RPC_TIMEOUT = 30  # seconds per request in the stdio tests; a hang fails instead of blocking the suite
 READ_TOOLS = {"ponerme_al_dia", "hoy", "resumen", "materias", "materia", "actividades", "clases",
               "notas", "tareas", "buscar", "leer_fuente", "anomalias", "mapa", "indice_clase",
-              "capturas", "leer_transcripcion"}
+              "capturas", "leer_transcripcion", "transcripciones_descargadas"}
 WRITE_TOOLS = {"guardar_mapa", "guardar_indice_clase", "procesar_clase",
-               "completar_clase"}  # preview → plan_id → approval (tests/test_mcp_map.py)
+               "completar_clase", "importar_transcripciones"}  # preview → plan_id → approval (tests/test_mcp_map.py)
 EXPECTED = READ_TOOLS | WRITE_TOOLS
 
 

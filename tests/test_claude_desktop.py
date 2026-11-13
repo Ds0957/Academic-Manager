@@ -3,6 +3,7 @@
 Fake %APPDATA% / %LOCALAPPDATA% live in temporary folders outside the worktree; nothing touches
 a real Claude Desktop installation.
 """
+import html
 import json
 import os
 import re
@@ -287,6 +288,14 @@ class ClaudePageTests(PanelCase):
         self.assertIn("no está instalado", body)
         self.assertFalse((self.fake.appdata / "Claude").exists())
 
+    def test_page_offers_the_drive_transcript_button(self):
+        from academic_app import drive_button
+        status, _, body = self.get("/claude")
+        self.assertEqual(status, 200)
+        self.assertIn('class="marcador"', body)
+        self.assertIn(html.escape(drive_button.href(), quote=True), body)
+        self.assertIn("Importa las transcripciones descargadas", body)
+
     def test_connect_flow_with_other_servers(self):
         config = self.fake.normal("Local State")
         config.write_text(json.dumps({"globalShortcut": "Ctrl+Space", "mcpServers": dict(OTHER)}),
@@ -368,7 +377,9 @@ class ClaudePageTests(PanelCase):
         self.assertIn("Memory", body)
         self.assertLess(body.index('id="claude-coordinador"'), body.index('id="claude-MAT-GBD"'))
         self.assertLess(body.index('id="claude-MAT-GBD"'), body.index('id="claude-MAT-SO2"'))
-        self.assertEqual(body.count('class="copiar"'), 3 + body.count('id="claude-manual"'))
+        self.assertEqual(body.count('class="copiar"'),
+                         3 + body.count('id="claude-manual"') + body.count('id="drive-button"'))
+        self.assertEqual(body.count('id="drive-button"'), 1)
         self.assertIn("Este proyecto es el Coordinador", body)
         self.assertIn("Este proyecto es solo de Sistemas operativos II (MAT-SO2)", body)
         self.assertIn("ponerme_al_dia para MAT-SO2", body)

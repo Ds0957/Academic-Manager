@@ -46,6 +46,8 @@ def parser():
     p.add_argument("--semester")
     p.add_argument("--subject")
     p.add_argument("--recording-name", help="Nombre original verificado al importar una transcripción")
+    p.add_argument("--recording-url", help="Enlace de Google Drive de la grabación de una transcripción importada; "
+                                          "queda como su procedencia")
     p.add_argument("--class-date", help="Fecha verificada YYYY-MM-DD; nunca se infiere")
     p.add_argument("--language", default="es",
                    help="Idioma del audio y de los subtítulos manuales de YouTube (por defecto es)")
@@ -99,6 +101,10 @@ def create_job(args):
         raise CaptureError("Un recorte --start requiere --duration para identificarlo como prueba.")
     if args.transcript and (args.start or args.duration is not None):
         raise CaptureError("La importación no recorta transcripciones; los tiempos ya deben ser originales.")
+    if args.recording_url and not args.transcript:
+        raise CaptureError("--recording-url solo acompaña a --transcript.")
+    if args.recording_url:
+        drive.file_id(args.recording_url)  # solo un enlace de Google Drive
     if args.class_date:
         from datetime import date
         try:
@@ -121,6 +127,8 @@ def create_job(args):
             "hashes": None, "publication_path": None}
     if args.source:
         job["request"]["model"] = args.model or DEFAULT_MODEL
+    if args.recording_url:
+        job["request"]["recording_url"] = args.recording_url
     if args.tipo == "material":
         job["request"].update(tipo="material", subject_id=args.subject_id)
     return job
@@ -205,6 +213,10 @@ def run(args):
                         metadata["kind"] = "existing_transcript"
                         if request["recording_name"]:
                             metadata["original_name"] = request["recording_name"]
+                        if request.get("recording_url"):
+                            recording = drive.file_id(request["recording_url"])
+                            metadata.update(location=f"https://drive.google.com/file/d/{recording}/view",
+                                            file_id=recording)
                     elif source_kind(request["source"]) == "local":
                         metadata = local.inspect(request["source"])
                     elif source_kind(request["source"]) == "youtube":

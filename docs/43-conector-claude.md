@@ -10,7 +10,7 @@ Es un servidor **MCP** (Model Context Protocol) local: Claude Desktop lo abre en
 
 ## Herramientas
 
-Todas son **de solo lectura** salvo `procesar_clase`, `completar_clase`, `guardar_mapa` y `guardar_indice_clase`. Estas dos últimas guardan el mapa de una materia y el índice de una clase con vista previa y aprobación (ver más abajo). Las de lectura no escriben en la base, en Drive ni en archivos. Usan los mismos lectores que el chat y el panel ([27](27-contrato-consulta-academica.md), [34](34-today.md), [35](35-summary.md), [36](36-anomalias.md), [41](41-panel.md)).
+Todas son **de solo lectura** salvo `procesar_clase`, `importar_transcripciones`, `completar_clase`, `guardar_mapa` y `guardar_indice_clase`. Estas dos últimas guardan el mapa de una materia y el índice de una clase con vista previa y aprobación (ver más abajo). Las de lectura no escriben en la base, en Drive ni en archivos. Usan los mismos lectores que el chat y el panel ([27](27-contrato-consulta-academica.md), [34](34-today.md), [35](35-summary.md), [36](36-anomalias.md), [41](41-panel.md)).
 
 | Herramienta | Qué devuelve |
 |---|---|
@@ -32,6 +32,8 @@ Todas son **de solo lectura** salvo `procesar_clase`, `completar_clase`, `guarda
 | `capturas` | Proceso en curso y últimos trabajos de Capture: fase, avance, publicación y registro (`limite`). |
 | `leer_transcripcion` | Transcripción de un trabajo, por partes, aunque la clase aún no esté registrada (`trabajo`, `offset`, `length`). |
 | `procesar_clase` | **Escribe.** Lanza Capture sobre una grabación de Drive (`enlace`, `materia`, `fecha`; para empezar, además `plan_id` y `aprobar: true`). |
+| `transcripciones_descargadas` | Transcripciones `.vtt` en Descargas, bajadas con el botón «Transcripción de Drive»: archivo, grabación, fecha, enlace y si ya está procesada. |
+| `importar_transcripciones` | **Escribe.** Crea clases desde esas transcripciones, sin descargar el video (`archivos`, `materia`; para empezar, además `plan_id` y `aprobar: true`). |
 | `completar_clase` | **Escribe.** Guarda el índice de la clase, la publica y la registra (`trabajo`, `indice`; para empezar, además `plan_id` y `aprobar: true`). |
 
 ### `procesar_clase` y `completar_clase`: una clase de principio a fin
@@ -45,6 +47,17 @@ Claude procesa una clase sin que la persona use comandos:
 5. `completar_clase` sin `aprobar` comprueba los minutos y las citas contra la transcripción del trabajo, y comprueba la clase. Con la aprobación, corre en segundo plano el `complete` de `academic_operations` ([31](31-operaciones-coordinador.md)) y guarda el índice.
 
 Capture exige un `analysis.md` para publicar, así que ese archivo se genera del índice (`class_index.render`). Las clases registradas antes conservan su análisis; a ellas se les agrega el índice con `guardar_indice_clase`.
+
+### Grabaciones que no se pueden descargar: `importar_transcripciones`
+
+Algunos profesores desactivan la descarga del video en Drive (por ejemplo, en inglés), pero el reproductor sigue mostrando su transcripción automática. El botón «Transcripción de Drive» (en Academic Manager → «Configuración» → «Claude») la guarda en Descargas como `<grabación> [<código de Drive>].vtt`. Después:
+
+1. `transcripciones_descargadas` lista esos archivos con la fecha que dice su nombre y si la grabación ya está procesada.
+2. `importar_transcripciones` sin `aprobar` muestra cada clase (fecha, fragmentos, minutos y enlace) y devuelve un `plan_id`. Acepta de 1 a 15 archivos de la misma materia.
+3. Con la aprobación, guarda una copia de cada archivo en `procesamiento/transcripciones-importadas/` y Capture la importa con `--transcript`, `--recording-name` y `--recording-url` en un proceso aparte. Tarda segundos por clase.
+4. Cada clase queda transcrita y sin índice: se termina igual que las demás, con `leer_transcripcion` y `completar_clase`.
+
+Capture limpia los subtítulos de Drive: cada frase se toma una sola vez, sin las marcas de tiempo por palabra, y se unen en fragmentos de unos 30 segundos con sus tiempos originales (`capture/transcription/formatter.import_vtt`). La clase queda registrada con el enlace de su grabación en Drive, así que la misma grabación no se procesa dos veces, ni por video ni por transcripción. Solo entran nombres de archivos `.vtt` que estén directamente en Descargas, nunca rutas; un archivo sin el código de la grabación o sin fecha en el nombre se rechaza.
 
 Controles (`academic_operations/class_capture.py`):
 
