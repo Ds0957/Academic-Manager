@@ -66,7 +66,7 @@ def task_buttons(csrf, task, title, back, *, state="pendiente", ident=""):
 
 
 def item_actions(csrf, back):
-    """Acciones rápidas de cada tarjeta de pendiente (página «Hoy» y de cada materia)."""
+    """Acciones rápidas de cada tarjeta de pendiente (páginas «Mi semana» y de cada materia)."""
     def actions(item):
         if item.get("tipo") in ACTIVITY_TYPES and item.get("actividad_id"):
             return ('<div class="item-actions">'

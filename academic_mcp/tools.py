@@ -575,6 +575,13 @@ def _read_transcript(runtime, args):
                                             length=args.get("length", 12_000)))
 
 
+def _google_login(runtime, args):
+    from academic_operations import google_login
+    if args.get("consultar"):
+        return google_login.status(runtime)
+    return _operation(lambda: google_login.start(runtime))
+
+
 def _job(text="Identificador del trabajo, como lo devuelve «capturas»."):
     return {"type": "string", "pattern": JOB_ID_PATTERN, "description": text}
 
@@ -611,6 +618,16 @@ CAPTURE_TOOLS = [
                             "description": "Fecha de la clase, YYYY-MM-DD, según la grabación o la persona."},
                   **PLAN_ARGUMENTS}, ["enlace", "materia", "fecha"]),
          _process, read_only=False),
+    Tool("iniciar_sesion_google", "Renovar la sesión de Google",
+         "Renueva la sesión de Google de Academic Manager cuando otra herramienta responde que venció "
+         "(GOOGLE_LOGIN). Pregunte antes a la persona si está frente a este PC: se abre Google en su "
+         "navegador y ella elige la cuenta y autoriza; el chat nunca ve la contraseña ni el token. Después "
+         "llámela con consultar: true hasta que «estado» sea «listo» o «error» (tiene 3 minutos), y solo "
+         "entonces repita lo que falló.",
+         _schema({"consultar": {"type": "boolean",
+                                "description": "true: solo muestra el resultado del último inicio de sesión, "
+                                               "sin abrir otro."}}),
+         _google_login, read_only=False),
     Tool("transcripciones_descargadas", "Transcripciones descargadas",
          "Lista las transcripciones .vtt que la persona descargó con el botón «Transcripción de Drive» (sirve "
          "para las grabaciones que no se pueden descargar, como las de inglés): archivo, grabación, fecha, "

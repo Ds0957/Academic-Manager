@@ -73,6 +73,10 @@ table { border-collapse: collapse; width:100%; } td, th { text-align:left; paddi
 .stat.k-bad { border-top-color:var(--bad); } .stat.k-bad .num { color:var(--bad); }
 .stat.k-info { border-top-color:var(--info); } .stat.k-task { border-top-color:var(--task); }
 .stat.k-todo { border-top-color:var(--todo); }
+.stat.k-ok { border-top-color:var(--ok); }
+details.more-items > summary { cursor:pointer; font-weight:700; font-size:1.05rem; }
+details.more-items[open] > summary { margin-bottom:12px; }
+.class-rows small { display:block; } .class-rows .inline-form { margin:0; }
 .grid { display:grid; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); gap:0 22px; align-items:start; }
 .cards { display:grid; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); gap:14px; margin:14px 0; }
 .cards .card { margin:0; }

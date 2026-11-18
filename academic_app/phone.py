@@ -37,7 +37,7 @@ MAX_FAILURES = 5
 LOCKOUT_SECONDS = 900
 ITERATIONS = 200_000
 
-ALLOWED_GET = {"/panel", "/panel/resumen", "/panel/materias", "/panel/instrucciones",
+ALLOWED_GET = {"/panel", "/panel/resumen", "/panel/clases", "/panel/materias", "/panel/instrucciones",
                *assets.ASSETS}  # scripts fijos de los diagramas del mapa de la materia
 ALLOWED_GET_PREFIXES = ("/panel/materia/", "/panel/publicando/")
 ALLOWED_POST = {"/panel/registrar", "/panel/registrar/aprobar"}

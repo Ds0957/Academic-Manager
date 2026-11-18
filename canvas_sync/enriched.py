@@ -20,6 +20,7 @@ MAX_PAGE_DETAILS = 30
 MAX_MODULES = 30
 TEXT_LIMIT = 40000
 URL_LIMIT = 120
+DRIVE_HOSTS = ("drive.google.com", "docs.google.com")
 
 
 class TextExtractor(HTMLParser):
@@ -29,6 +30,8 @@ class TextExtractor(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.blocks = []
         self.links = []
+        self.anchors = []  # texto de los enlaces de Drive: «Session 1» dice de qué clase es la grabación
+        self.anchor = None
         self.ignored = 0
 
     def handle_starttag(self, tag, attributes):
@@ -46,6 +49,8 @@ class TextExtractor(HTMLParser):
                         or (not parts.scheme and not parts.netloc and url.startswith("/"))):
                     if len(self.links) < URL_LIMIT and url not in self.links:
                         self.links.append(url)
+                    if tag == "a" and name == "href" and parts.netloc in DRIVE_HOSTS:
+                        self.anchor = (url, [])
             if tag == "img" and name == "alt" and value:
                 self.blocks.append(value)
 
@@ -55,12 +60,19 @@ class TextExtractor(HTMLParser):
     def handle_endtag(self, tag):
         if tag in ("script", "style", "noscript"):
             self.ignored = max(0, self.ignored - 1)
+        if tag == "a" and self.anchor is not None:
+            url, words = self.anchor
+            self.anchor = None
+            if len(self.anchors) < URL_LIMIT:
+                self.anchors.append({"url": url, "text": " ".join("".join(words).split())})
         if not self.ignored and tag in ("p", "li", "div", "h1", "h2", "h3", "tr"):
             self.blocks.append("\n")
 
     def handle_data(self, data):
         if not self.ignored:
             self.blocks.append(data)
+            if self.anchor is not None:
+                self.anchor[1].append(data)
 
 
 def content_from_html(raw):
@@ -74,8 +86,11 @@ def content_from_html(raw):
     parser.feed(raw)
     lines = [" ".join(line.split()) for line in "".join(parser.blocks).splitlines()]
     text = "\n".join(line for line in lines if line)
-    return {"text": text[:TEXT_LIMIT], "truncated": len(text) > TEXT_LIMIT,
-            "links": parser.links, "source_format": "canvas_html"}
+    content = {"text": text[:TEXT_LIMIT], "truncated": len(text) > TEXT_LIMIT,
+               "links": parser.links, "source_format": "canvas_html"}
+    if parser.anchors:
+        content["anchors"] = parser.anchors
+    return content
 
 
 def fields(value, keys):

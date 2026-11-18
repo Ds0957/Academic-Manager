@@ -126,6 +126,27 @@ class PlanTests(Base):
         self.assertNotIn("--transcript", str(caught.exception))
         self.assertNotIn("detalle interno", str(caught.exception))
 
+    def test_an_expired_google_login_says_how_to_renew_it(self):
+        expired = CaptureError("La autorización local caducó, fue revocada o no se pudo leer.")
+        with patch("capture.sources.drive.service", side_effect=expired):
+            with self.assertRaises(OperationError) as caught:
+                cc.plan(self.runtime, LINK, "MAT-ST", "2026-10-29")
+        self.assertEqual(caught.exception.code, "GOOGLE_LOGIN")
+        self.assertIn("Volver a iniciar sesión", str(caught.exception))
+        self.assertNotIn("--login-drive", str(caught.exception))
+
+    def test_a_login_in_use_by_another_process_is_not_an_expired_login(self):
+        busy = CaptureError("El job ya está siendo procesado por otra sesión.")
+        with patch("capture.sources.drive.service", side_effect=busy):
+            with self.assertRaises(OperationError) as caught:
+                cc.plan(self.runtime, LINK, "MAT-ST", "2026-10-29")
+        self.assertEqual(caught.exception.code, "DRIVE_UNAVAILABLE")
+
+    def test_a_drive_network_failure_keeps_the_general_message(self):
+        with self.assertRaises(OperationError) as caught:
+            self.plan(FakeApi(error=OSError("sin red")))
+        self.assertEqual(caught.exception.code, "DRIVE_UNAVAILABLE")
+
     def test_a_recording_already_processed_is_refused_with_its_job(self):
         self.job()
         with self.assertRaises(OperationError) as caught:

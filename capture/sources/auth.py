@@ -14,6 +14,11 @@ SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 # Se piden los dos alcances para que el mismo token siga sirviendo a Capture con SCOPES.
 WRITE_SCOPE = "https://www.googleapis.com/auth/drive"
 WRITE_SCOPES = [*SCOPES, WRITE_SCOPE]
+# Solo lectura de Google Calendar (horario de clases y grabaciones adjuntas a las reuniones). Se pide en
+# el mismo inicio de sesión del asistente, pero es opcional: sin él, todo lo demás sigue funcionando.
+CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.readonly"
+MISSING_CALENDAR = ("Su sesión de Google no tiene permiso para leer Google Calendar. Abra el asistente y pulse "
+                    "«Volver a iniciar sesión» en el paso de Google; marque también el permiso de Calendar.")
 
 
 def libraries():
@@ -156,7 +161,7 @@ def login(runtime, client_file, *, write=False):
     path = token_path(runtime)
     with job_lock(path.parent):
         try:
-            flow = Flow.from_client_config(config, scopes=WRITE_SCOPES if write else SCOPES,
+            flow = Flow.from_client_config(config, scopes=[*WRITE_SCOPES, CALENDAR_SCOPE] if write else SCOPES,
                                            autogenerate_code_verifier=True)
             if write:
                 print("Se abrirá Google en el navegador de este PC. Elija su cuenta y autorice ver, "
@@ -222,6 +227,19 @@ def load_write_credentials(runtime):
                         missing=MISSING_WRITE)
 
 
+def load_calendar_credentials(runtime):
+    """Lectura de Calendar con la sesión del asistente; None sin sesión, CaptureError si falta el permiso."""
+    if not (Path(runtime).resolve() / "control" / "drive-oauth").is_dir():
+        return None
+    path = write_token_path(runtime)
+    if not path.exists() and not path.is_symlink():
+        return None
+    relogin = ("La sesión de Google caducó o fue revocada. Abra el asistente y pulse «Volver a iniciar sesión» "
+               "en el paso de Google.")
+    return _load_stored(path, [*WRITE_SCOPES, CALENDAR_SCOPE], check_write_scopes, relogin, relogin,
+                        require=CALENDAR_SCOPE, missing=MISSING_CALENDAR)
+
+
 MISSING_WRITE = ("Su sesión de Google no tiene permiso para guardar en Drive. Abra el asistente y pulse "
                  "«Volver a iniciar sesión» en el paso de Google; marque todos los permisos que pide Google.")
 
@@ -240,7 +258,9 @@ def _load_stored(path, scopes, check, renew, failure, require=None, missing=None
             info = json.loads(data)
             if require is not None and require not in (info.get("scopes") or []):
                 raise CaptureError(missing or renew)
-            credentials = Credentials.from_authorized_user_info(info, scopes=scopes)
+            # Renovar con los permisos ya guardados: si no, el token se guardaría sin los demás.
+            stored = [s for s in info.get("scopes") or [] if isinstance(s, str) and s not in scopes]
+            credentials = Credentials.from_authorized_user_info(info, scopes=[*scopes, *stored])
             check(credentials)
             if not credentials.valid:
                 if not credentials.refresh_token:

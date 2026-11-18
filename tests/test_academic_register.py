@@ -334,8 +334,8 @@ class ButtonsTests(RegisterCase):
 
     def test_odd_titles_are_escaped_and_survive_the_round_trip(self):
         odd = 'Taller "final" <b>&</b>\nparte 2'
-        self.today.return_value = {**self.today.return_value,
-                                   "items": [{**self.today.return_value["items"][0], "titulo": odd}]}
+        week = self.week.return_value
+        self.week.return_value = {**week, "entregas": [{**week["entregas"][0], "titulo": odd}]}
         body = self.get("/panel")[2]
         self.assertNotIn("<b>&</b>", body)
         fields = self.find(body, "Marcar como entregada", actividad_id="ACT-1")

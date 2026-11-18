@@ -303,7 +303,7 @@ class RenderProbes(Both):
         self.wizard.deps["check_update"] = MagicMock(return_value=release)
         self.wizard.start_update_check().join(5)
         _, csrf = self.login()
-        for path in ("/panel", "/panel/resumen", "/panel/materias", "/panel/instrucciones",
+        for path in ("/panel", "/panel/clases", "/panel/materias", "/panel/instrucciones",
                      "/panel/materia/MAT-GBD", "/panel/materia/NOPE", "/panel/publicando/nope"):
             r, t = self.preq("GET", path)
             self.assertIn(r.status, (200, 404), path)
@@ -360,7 +360,7 @@ class ConcurrencyProbes(Both):
             return summary_data()
         self.summary.side_effect = slow
         out = {}
-        th = threading.Thread(target=lambda: out.setdefault("p", self.preq("GET", "/panel/resumen")),
+        th = threading.Thread(target=lambda: out.setdefault("p", self.preq("GET", "/panel/clases")),
                               name="phone-probe")
         # handler thread name differs; mark by patching: use a dep that blocks only once
         calls = {"n": 0}
@@ -375,7 +375,7 @@ class ConcurrencyProbes(Both):
         self.summary.side_effect = once
         th.start()
         self.assertTrue(entered.wait(5))
-        status, _, body = self.get("/panel/resumen")  # PC while phone request in flight
+        status, _, body = self.get("/panel/clases")  # PC while phone request in flight
         gate.set()
         th.join(5)
         self.assertIn('href="/"', body)

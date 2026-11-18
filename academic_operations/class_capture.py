@@ -45,6 +45,10 @@ DRIVE_DENIED = ("Google Drive no dejó abrir esa grabación con la cuenta de Aca
                 "sea correcto y que esa cuenta pueda ver y descargar el archivo.")
 DRIVE_FAILED = ("No se pudo consultar Google Drive. Revise la conexión y el inicio de sesión en Academic Manager "
                 "→ «Configuración», y vuelva a intentarlo.")
+GOOGLE_LOGIN = ("La sesión de Google de Academic Manager venció o no existe; los enlaces no tienen la culpa. "
+                "Se renueva con «iniciar_sesion_google» (abre Google en el navegador de este PC) o en el "
+                "asistente de Academic Manager, paso de Google, «Volver a iniciar sesión»; después vuelva a "
+                "intentarlo.")
 BUSY = ("Ya hay una clase en proceso en este PC. Consulte «capturas» y vuelva a intentarlo cuando termine; se "
         "procesa una a la vez.")
 NOT_STARTED = "Windows no dejó empezar el proceso. Inténtelo otra vez; si sigue igual, pida ayuda."
@@ -128,8 +132,15 @@ def _drive_link(link):
 
 
 def _inspect(runtime, source, api):
+    if api is None:
+        try:
+            api = drive.service(runtime=runtime)
+        except CaptureError as exc:
+            if "siendo procesado" in str(exc):  # otro proceso renueva la sesión en este momento
+                _fail("DRIVE_UNAVAILABLE", DRIVE_FAILED)
+            _fail("GOOGLE_LOGIN", GOOGLE_LOGIN)  # sin sesión, o vencida/revocada: no es el enlace
     try:
-        return drive.inspect(source, api if api is not None else drive.service(runtime=runtime))
+        return drive.inspect(source, api)
     except CaptureError as exc:
         denied = isinstance(exc.__cause__, Exception) and getattr(
             getattr(exc.__cause__, "resp", None), "status", None) in (401, 403, 404)
@@ -377,15 +388,21 @@ def _approved(plan_id, expected, approved):
                               "aprobación.")
 
 
-def start(runtime, link, subject_id, day, *, plan_id, approved, api=None, popen=subprocess.Popen, now=time.time):
-    """Con la aprobación de la persona, lanza Capture sobre lo que mostró la vista previa."""
+def start(runtime, link, subject_id, day, *, plan_id, approved, api=None, popen=subprocess.Popen, now=time.time,
+          automatic=False):
+    """Con la aprobación de la persona, lanza Capture sobre lo que mostró la vista previa.
+
+    `automatic`: lo lanza la rutina de clases automáticas (la persona decidió que transcribir no
+    pida permiso); al terminar, el proceso sigue con la próxima grabación (`auto_classes`)."""
     if not approved:
         _approved(plan_id, plan_id, False)
     current = plan(runtime, link, subject_id, day, api=api)
     _approved(plan_id, current["plan_id"], approved)
-    return _launch(runtime, {"tipo": "capturar", "fuente": current["fuente"], "semestre": current["semestre"],
-                             "materia": current["materia"], "fecha": current["fecha"],
-                             "reanuda": current["reanuda"]}, popen, now)
+    order = {"tipo": "capturar", "fuente": current["fuente"], "semestre": current["semestre"],
+             "materia": current["materia"], "fecha": current["fecha"], "reanuda": current["reanuda"]}
+    if automatic:
+        order["automatica"] = True
+    return _launch(runtime, order, popen, now)
 
 
 def _job_id(job_id):
@@ -505,16 +522,29 @@ def _serve(runtime):
 
 
 def run(runtime):
-    """Proceso aparte: un solo pedido, con el bloqueo tomado hasta terminar."""
+    """Proceso aparte: un solo pedido, con el bloqueo tomado hasta terminar.
+
+    Si el pedido lo lanzó la rutina de clases automáticas, al soltar el bloqueo sigue con la
+    próxima grabación de la cola."""
     runtime = Path(runtime)
     for attempt in range(LOCK_TRIES):
         try:
             with job_lock(_folder(runtime)):
-                return _serve(runtime)
+                order = (_read(runtime) or {}).get("pedido") or {}
+                code = _serve(runtime)
+            break
         except CaptureError:  # `_serve` ya atiende los suyos: aquí solo llega el bloqueo ocupado
             if attempt + 1 < LOCK_TRIES:
                 time.sleep(1)
-    return 1
+    else:
+        return 1
+    if order.get("automatica"):
+        from . import auto_classes
+        try:
+            auto_classes.launch_next(runtime)
+        except Exception:  # noqa: BLE001 - la clase ya terminó; la próxima corrida diaria sigue la cola
+            pass
+    return code
 
 
 def main(argv=None):

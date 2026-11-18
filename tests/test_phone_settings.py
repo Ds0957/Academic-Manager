@@ -239,13 +239,13 @@ class PhoneNavigationTests(PanelCase):
         return self.wizard.handle("GET", path, {}, {}, "tok", phone=True).body
 
     def test_phone_pages_offer_only_phone_parts(self):
-        for path in ("/panel", "/panel/resumen", "/panel/materias", "/panel/instrucciones"):
+        for path in ("/panel", "/panel/clases", "/panel/materias", "/panel/instrucciones"):
             body = self.phone_page(path)
-            for link in ('href="/panel"', 'href="/panel/resumen"', 'href="/panel/materias"',
+            for link in ('href="/panel"', 'href="/panel/clases"', 'href="/panel/materias"',
                          'href="/panel/instrucciones"', 'action="/salir"', ">Salir<"):
                 self.assertIn(link, body, path)
             for pc_only in ('href="/"', "Configuración</a>", "/actualizar", "/panel/sincronizar",
-                            "Sincronizar ahora", "Cerrar el asistente"):
+                            "Sincronizar ahora", "Cerrar el asistente", "/panel/clases/quitar"):
                 self.assertNotIn(pc_only, body, path)
 
     def test_phone_problem_card_has_no_pc_links(self):

@@ -28,6 +28,18 @@ TODAY_ITEMS = [
 ]
 TODAY = {"fecha": "2026-10-31", "dias": 14, "fechas_zona": "America/Bogota", "resumen": {},
          "items": TODAY_ITEMS, "workbook_sha256": "abc"}
+CLASS_ITEMS = [
+    {"clave": "f" * 32, "clase_id": None, "trabajo": "f" * 32, "materia_id": "MAT-SO2", "materia": "Sistemas operativos II",
+     "fecha": "2026-10-30", "titulo": "Sesión <SO2>", "estado": "falta_indice",
+     "siguiente_paso": "Pídale a Claude que la complete: lee la transcripción y crea su índice («completar_clase»)."},
+    {"clave": "CLS-GBD-1", "clase_id": "CLS-GBD-1", "trabajo": None, "materia_id": "MAT-GBD",
+     "materia": "Gestión de bases <datos>", "fecha": "2026-10-28", "titulo": "Clase de normalización",
+     "estado": "lista", "siguiente_paso": "Repásela con su índice, o estúdiela con Claude."}]
+WEEK = {"fecha": "2026-10-31", "hasta": "2026-11-06", "fechas_zona": "America/Bogota", "clases": CLASS_ITEMS,
+        "entregas": TODAY_ITEMS[:2], "otros": TODAY_ITEMS[2:],
+        "resumen": {"clases_por_atender": 1, "clases_listas": 1, "entregas": 2, "atrasadas": 1},
+        "workbook_sha256": "abc"}
+CLASSES = {"fecha": "2026-10-31", "clases": CLASS_ITEMS, "quitadas": []}
 HISTORY_OK = {"ultimo_ok": "2026-10-31 08:00:12", "fallos_seguidos": 0, "fallando_desde": None,
               "ultimo_intento": "2026-10-31 08:00:12", "ultimo_error": None}
 
@@ -173,12 +185,16 @@ class PanelCase(ServerCase):
         super().setUp()
         self.choose_data_folder()
         self.today = MagicMock(return_value=TODAY)
+        self.week = MagicMock(return_value=WEEK)
+        self.classes = MagicMock(return_value=CLASSES)
+        self.hide = MagicMock(return_value=[])
         self.summary = MagicMock(return_value=summary_data())
         self.brief = MagicMock(return_value=BRIEF)
         self.instructions = MagicMock(return_value=dict(INSTRUCTIONS))
         self.version = MagicMock(return_value="abc")
         self.wizard.deps.update(panel_today=self.today, panel_summary=self.summary, panel_brief=self.brief,
-                                panel_instructions=self.instructions, workbook_version=self.version)
+                                panel_instructions=self.instructions, workbook_version=self.version,
+                                panel_week=self.week, panel_classes=self.classes, panel_hide_class=self.hide)
 
     def complete(self, done=True):
         state = "hecho" if done else "falta"
@@ -195,14 +211,16 @@ class PanelCase(ServerCase):
             self.assertNotIn(raw, visible)
 
     def assert_nav(self, body):
-        for link in ('href="/panel"', 'href="/panel/resumen"', 'href="/panel/materias"',
+        for link in ('href="/panel"', 'href="/panel/clases"', 'href="/panel/materias"',
                      'href="/panel/instrucciones"', 'href="/"'):
             self.assertIn(link, body)
-        self.assertIn("Configuración", body)
+        for label in ("Mi semana", "Clases", "Configuración"):
+            self.assertIn(f">{label}</a>", body)
+        self.assertNotIn('href="/panel/resumen"', body)
 
 
 class PanelPagesTests(PanelCase):
-    def test_today_lists_items_in_order_with_names_and_plain_types(self):
+    def test_week_lists_items_in_order_with_names_and_plain_types(self):
         status, _, body = self.get("/panel")
         self.assertEqual(status, 200)
         self.assert_nav(body)
@@ -216,7 +234,7 @@ class PanelPagesTests(PanelCase):
         self.assertNotIn("actividad_proxima", body)
         self.assert_plain(body)
 
-    def test_today_shows_plain_warnings_not_raw_ones(self):
+    def test_week_shows_plain_warnings_not_raw_ones(self):
         self.summary.return_value = summary_data(indice={"fresh": False, "generated_at_utc": None})
         self.summary.return_value["avisos"] = ["El índice local está desactualizado: ejecutar "
                                                "scripts\\knowledge.cmd build."]
@@ -224,43 +242,57 @@ class PanelPagesTests(PanelCase):
         self.assertIn("índice", body)
         self.assertNotIn("knowledge.cmd", body)
 
-    def test_empty_today(self):
-        self.today.return_value = {**TODAY, "items": []}
+    def test_empty_week(self):
+        self.week.return_value = {**WEEK, "clases": [], "entregas": [], "otros": [],
+                                  "resumen": dict.fromkeys(WEEK["resumen"], 0)}
         body = self.get("/panel")[2]
-        self.assertIn("No hay nada pendiente", body)
+        self.assertIn("Ninguna clase pendiente", body)
+        self.assertIn("Nada que entregar esta semana", body)
+        self.assertNotIn("Más adelante", body)
 
-    def test_summary_page(self):
-        status, _, body = self.get("/panel/resumen")
+    def test_week_puts_classes_to_attend_and_deliveries_first(self):
+        status, _, body = self.get("/panel")
         self.assertEqual(status, 200)
-        self.assert_nav(body)
-        for text in ("Segundo semestre 2026", "2026-2", "Sistemas operativos II", "Estudiar los martes",
-                     "Comprar libro", "Quiz 2", "sábado 31 de octubre de 2026", "08:00"):
-            self.assertIn(text, body)
-        self.assertIn("2 materias", body)
+        self.assertIn("Del sábado 31 de octubre de 2026 al viernes 6 de noviembre de 2026.", body)
+        classes, deliveries = body.index("Clases por atender</h2>"), body.index("Entregas de la semana</h2>")
+        later = body.index("Más adelante, tareas y avisos")
+        self.assertLess(classes, body.index("Sesión &lt;SO2&gt;"))
+        self.assertLess(body.index("Sesión &lt;SO2&gt;"), deliveries)
+        self.assertLess(deliveries, body.index("Taller &lt;uno&gt;"))
+        self.assertLess(body.index("Quiz 2"), later)
+        self.assertLess(later, body.index("Comprar libro"))
+        self.assertIn("Transcrita, falta el índice", body)
+        self.assertIn("«completar_clase»", body)
+        self.assertIn('href="/panel/materia/MAT-GBD/clase/CLS-GBD-1"', body)
+        self.assertIn('action="/panel/clases/quitar"', body)  # el trabajo sin registrar se puede quitar
+        self.assertIn('href="/panel/clases"', body)
         self.assert_plain(body)
+
+    def test_old_summary_link_goes_to_my_week(self):
+        status, response, _ = self.get("/panel/resumen")
+        self.assertEqual(status, 303)
+        self.assertEqual(response.headers["Location"], "/panel")
 
     def test_one_subject_is_counted_in_singular(self):
         data = summary_data()
         data["materias"] = data["materias"][:1]
         self.summary.return_value = data
-        for path in ("/panel/resumen", "/panel/materias"):
+        for path in ("/panel/materias",):
             body = self.get(path)[2]
             self.assertIn("1 materia", body)
             self.assertNotIn("1 materias", body)
 
-    def test_today_groups_items_by_date_with_counts_and_relative_days(self):
+    def test_week_counts_and_groups_the_rest_by_date(self):
         body = self.get("/panel")[2]
-        late, tomorrow, undated = (body.index(f">{title} <span") for title in ("Atrasado", "Mañana", "Sin fecha"))
-        self.assertLess(late, body.index("Taller &lt;uno&gt;"))
-        self.assertLess(body.index("Taller &lt;uno&gt;"), tomorrow)
-        self.assertLess(tomorrow, body.index("Quiz 2"))
-        self.assertLess(body.index("Quiz 2"), undated)
-        self.assertLess(undated, body.index("Comprar libro"))
-        self.assertNotIn(">Hoy <span", body)  # grupos vacíos no aparecen
         self.assertIn("hace 2 días", body)
         self.assertIn(">mañana<", body)
-        self.assertIn('<span class="num">1</span><span class="lbl">Atrasado</span>', body)
-        self.assertIn('<span class="num">1</span><span class="lbl">Sin fecha</span>', body)
+        for number, label in ((1, "Clases por atender"), (1, "Listas para estudiar"), (2, "Entregas esta semana"),
+                              (1, "Atrasadas")):
+            self.assertIn(f'<span class="num">{number}</span><span class="lbl">{label}</span>', body)
+        undated = body.index(">Sin fecha <span")
+        self.assertLess(body.index("Más adelante, tareas y avisos"), undated)
+        self.assertLess(undated, body.index("Comprar libro"))
+        self.assertNotIn(">Hoy <span", body)  # grupos vacíos no aparecen
 
     def test_each_subject_keeps_its_color_across_pages(self):
         for path in ("/panel", "/panel/materias"):
@@ -353,11 +385,70 @@ class PanelPagesTests(PanelCase):
         self.assertIn('action="/actualizar"', body)
 
 
+class ClassesPageTests(PanelCase):
+    def test_every_class_grouped_by_state(self):
+        self.classes.return_value = {**CLASSES, "quitadas": [{**CLASS_ITEMS[0], "clave": "e" * 32,
+                                                              "trabajo": "e" * 32, "titulo": "Video del trabajo"}]}
+        status, _, body = self.get("/panel/clases")
+        self.assertEqual(status, 200)
+        self.assert_nav(body)
+        self.assertIn('href="/panel/clases" aria-current="page"', body)
+        pending, ready = body.index(">Transcrita, falta el índice <span"), body.index(">Lista para estudiar <span")
+        self.assertLess(pending, body.index("Sesión &lt;SO2&gt;"))
+        self.assertLess(body.index("Sesión &lt;SO2&gt;"), ready)
+        self.assertLess(ready, body.index("Clase de normalización"))
+        self.assertIn("Quitadas de la lista", body)
+        self.assertIn('action="/panel/clases/mostrar"', body)
+        self.assert_plain(body)
+
+    def test_found_recordings_show_their_state_and_only_drive_links(self):
+        found = {"clave": "1SampleDriveFileIdForTests_000001", "clase_id": None, "trabajo": None,
+                 "materia_id": "MAT-SO2", "materia": "Sistemas operativos II", "fecha": "2026-10-29",
+                 "titulo": "English <III>", "estado": "solo_transcripcion", "siguiente_paso": "Pulse el botón.",
+                 "enlace": "https://drive.google.com/file/d/1SampleDriveFileIdForTests_000001/view"}
+        queued = {**found, "clave": "x2", "estado": "en_cola", "enlace": "javascript:alert(1)", "titulo": "Otra"}
+        self.classes.return_value = {**CLASSES, "clases": [found, queued]}
+        body = self.get("/panel/clases")[2]
+        self.assertIn(">Solo transcripción <span", body)
+        self.assertIn(">En cola <span", body)
+        self.assertIn('href="https://drive.google.com/file/d/1SampleDriveFileIdForTests_000001/view"', body)
+        self.assertNotIn("javascript:", body)
+        self.assertNotIn('action="/panel/clases/quitar"', body)  # no son trabajos de Capture
+        self.assert_plain(body)
+
+    def test_a_scheduled_class_without_recording_shows_its_state(self):
+        expected = {"clave": "agenda:MAT-SO2:2026-10-29", "clase_id": None, "trabajo": None, "materia_id": "MAT-SO2",
+                    "materia": "Sistemas operativos II", "fecha": "2026-10-29", "titulo": "Sesión <8>",
+                    "estado": "sin_grabacion", "siguiente_paso": "Clase de las 18:00. Espere la grabación."}
+        self.classes.return_value = {**CLASSES, "clases": [expected]}
+        body = self.get("/panel/clases")[2]
+        self.assertIn(">Sin grabación todavía <span", body)
+        self.assertIn("Sesión &lt;8&gt;", body)
+        self.assertIn("Clase de las 18:00.", body)
+        self.assertNotIn('action="/panel/clases/quitar"', body)
+        self.assert_plain(body)
+
+    def test_remove_and_restore_a_job_from_the_list(self):
+        status, response, _ = self.post("/panel/clases/quitar", {"trabajo": "f" * 32, "volver": "/panel"})
+        self.assertEqual((status, response.headers["Location"]), (303, "/panel"))
+        self.assertEqual(self.hide.call_args.args[1:], ("f" * 32, True))
+        self.assertIn("se quitó de la lista", self.get("/panel")[2])
+        status, response, _ = self.post("/panel/clases/mostrar", {"trabajo": "f" * 32, "volver": "https://evil"})
+        self.assertEqual(response.headers["Location"], "/panel/clases")
+        self.assertEqual(self.hide.call_args.args[1:], ("f" * 32, False))
+
+    def test_a_failed_change_is_plain(self):
+        self.hide.side_effect = AccessError("INVALID_ARGUMENT", "Ese trabajo no existe.")
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.post("/panel/clases/quitar", {"trabajo": "../x"})
+        self.assertIn("No se pudo cambiar la lista", self.get("/panel/clases")[2])
+
+
 class PanelFailureTests(PanelCase):
     def test_reader_failures_never_break_the_pages(self):
-        pages = ("/panel", "/panel/resumen", "/panel/materias", "/panel/materia/MAT-GBD", "/panel/instrucciones")
+        pages = ("/panel", "/panel/clases", "/panel/materias", "/panel/materia/MAT-GBD", "/panel/instrucciones")
         for exc in FAILURES:
-            for dep in (self.today, self.summary, self.brief, self.instructions):
+            for dep in (self.today, self.summary, self.brief, self.instructions, self.week, self.classes):
                 dep.side_effect = exc
             with self.subTest(exc=type(exc).__name__), contextlib.redirect_stderr(io.StringIO()):
                 for path in pages:
@@ -383,6 +474,7 @@ class PanelFailureTests(PanelCase):
         body = self.get("/panel")[2]
         self.assertIn('href="/"', body)
         self.today.assert_not_called()
+        self.week.assert_not_called()
         self.assert_plain(body)
 
 

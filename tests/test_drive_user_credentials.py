@@ -83,7 +83,8 @@ class Case(unittest.TestCase):
 class WriteLoginTests(Case):
     def test_wizard_login_requests_drive_and_keeps_capture_token(self):
         out = self.login(write=True)
-        self.assertEqual(self.Flow.from_client_config.call_args.kwargs["scopes"], [READ, WRITE])
+        self.assertEqual(self.Flow.from_client_config.call_args.kwargs["scopes"],
+                         [READ, WRITE, auth.CALENDAR_SCOPE])  # Calendar es opcional (tests/test_calendar_auth.py)
         write_path = auth.write_token_path(self.runtime)
         self.assertEqual(write_path.parent, auth.token_path(self.runtime).parent)
         self.assertEqual(write_path.name, "drive-write-token.dpapi" if os.name == "nt" else "drive-write-token.json")

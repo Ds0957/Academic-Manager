@@ -44,6 +44,10 @@ try {
         $message += [Environment]::NewLine + "ACADEMIC_KNOWLEDGE:" + [Environment]::NewLine + $knowledgeMessage
         $code = $LASTEXITCODE
     }
+    # Clases automáticas: busca grabaciones nuevas en lo sincronizado y lanza la siguiente con Capture,
+    # en un proceso aparte. Nunca cambia el resultado de la rutina.
+    $autoMessage = (& $python -m academic_operations.auto_classes --runtime $runtime 2>&1 | Out-String)
+    $message += [Environment]::NewLine + "CLASES_AUTOMATICAS:" + [Environment]::NewLine + $autoMessage
 } catch {
     $message += [Environment]::NewLine + "Error operacional: " + $_.Exception.Message
 }

@@ -4,7 +4,7 @@
 
 ## Para qué sirve
 
-El panel muestra, sin comandos, lo que Academic Manager sabe de sus materias: qué hacer primero, un resumen del semestre y cada materia con sus actividades y fechas. También prepara el texto para pegar en ChatGPT y permite **registrar** entregas, notas, tareas y decisiones (ver [Registrar desde el panel](#registrar-desde-el-panel)). Las páginas de consulta solo leen: no cambian la base de datos, no sincronizan Canvas ni Drive y no usan internet. Solo un registro aprobado escribe y publica.
+El panel muestra, sin comandos, lo que Academic Manager sabe de sus materias: su semana (clases por atender y entregas), todas las clases con su estado y cada materia con sus actividades y fechas. También prepara el texto para pegar en ChatGPT y permite **registrar** entregas, notas, tareas y decisiones (ver [Registrar desde el panel](#registrar-desde-el-panel)). Las páginas de consulta solo leen: no cambian la base de datos, no sincronizan Canvas ni Drive y no usan internet. Solo un registro aprobado escribe y publica.
 
 ## Cómo se abre
 
@@ -15,14 +15,14 @@ Con el mismo acceso directo **Academic Manager** que el asistente ([38-asistente
 
 También se puede abrir desde el celular en el mismo Wi-Fi, si lo activa en Configuración: ver [42-acceso-celular.md](42-acceso-celular.md).
 
-Arriba de cada página está la barra con el menú **Hoy · Resumen · Materias · Instrucciones · Configuración** en pestañas; Configuración es el asistente (muestra las pestañas cuando la configuración está completa). Cada materia tiene un color y sus iniciales, iguales en todas las páginas (según su orden en el semestre). Las fechas se muestran también en relativo («mañana», «en 3 días», «hace 2 días»). El aviso de versión nueva («Actualizar ahora») también aparece en el panel.
+Arriba de cada página está la barra con el menú **Mi semana · Clases · Materias · Instrucciones · Configuración** en pestañas; Configuración es el asistente (muestra las pestañas cuando la configuración está completa). Cada materia tiene un color y sus iniciales, iguales en todas las páginas (según su orden en el semestre). Las fechas se muestran también en relativo («mañana», «en 3 días», «hace 2 días»). El aviso de versión nueva («Actualizar ahora») también aparece en el panel.
 
 ## Las páginas
 
 | Página | Qué muestra | De dónde sale |
 |---|---|---|
-| **Hoy** (`/panel`) | Contadores (atrasado, esta semana, más adelante, sin fecha) y tarjetas agrupadas por fecha (Atrasado, Hoy, Mañana, Esta semana, Más adelante, Sin fecha); dentro de cada grupo se conserva el orden de `today` (lo más urgente arriba). Cada tarjeta lleva la fecha, el tipo con su color, la materia y el motivo; arriba, los avisos del sistema en lenguaje sencillo (sincronización con Canvas que falla o no corre, token de Canvas por vencer, índice desactualizado). Si hay actividades calificadas en Canvas en los últimos 7 días, el bloque **Notas nuevas en Canvas** con su nota y fecha. | `today` ([34-today.md](34-today.md)), `summary` ([35-summary.md](35-summary.md)) y datos de Canvas |
-| **Resumen** (`/panel/resumen`) | Semestre activo con contadores por tipo (vencidas, por entregar, tareas, clases sin procesar); en dos columnas, lo más urgente y, al lado, sus materias con la última clase, notas y tareas recientes y la última sincronización con Canvas. Junto a cada materia, su nota actual en Canvas y los mensajes sin leer. | `summary` y datos de Canvas |
+| **Mi semana** (`/panel`) | La pantalla principal (reemplaza a «Hoy» y «Resumen»; `/panel/resumen` lleva aquí). Contadores (clases por atender, listas para estudiar, entregas de esta semana, atrasadas). Arriba, **Clases por atender**: cada clase pendiente con su estado (procesando, con error, transcrita y sin índice, sin transcripción) y el paso siguiente, más las listas para estudiar de los últimos 7 días, que enlazan a su índice. Debajo, **Entregas de la semana**: lo atrasado y lo que vence en los próximos 7 días, con sus botones de registro. Lo demás (tareas, entregas posteriores, materias sin movimiento) queda plegado en **Más adelante, tareas y avisos**, agrupado por fecha. Al lado, **Notas nuevas en Canvas** (calificadas en los últimos 7 días) y la última sincronización. Arriba, los avisos del sistema en lenguaje sencillo. | `week` (`academic_access/week.py`, sobre `today` [34](34-today.md)), `summary` ([35](35-summary.md)) y datos de Canvas |
+| **Clases** (`/panel/clases`) | Todas las clases del semestre activo, de la más reciente a la más antigua, agrupadas por estado (con error, procesando, transcrita y sin índice, sin transcripción, en cola, solo transcripción, lista para estudiar; las dos de grabaciones encontradas solas se explican en [44](44-clases-automaticas.md)), con el paso siguiente de cada una; las listas enlazan a su índice. Incluye los trabajos de Capture que aún no se registran. Un trabajo que no es una clase (por ejemplo, el video de un trabajo) se puede **Quitar de la lista**: pasa a «Quitadas de la lista», de donde se puede **Volver a mostrar**; no se borra nada (`procesamiento/panel/clases-quitadas.json`). | `week.classes` |
 | **Materias** (`/panel/materias`) | Las materias del semestre activo en tarjetas, con la última clase, cuántos pendientes y vencidas tiene cada una, su nota actual en Canvas y los mensajes sin leer. | `summary`, `today` (solo para contar; si falla, la página sale sin los conteos) y datos de Canvas |
 | **Materia** (`/panel/materia/MAT-…`) | Formularios **Nueva tarea** y **Nueva decisión o nota**, botones de registro en cada pendiente, entrega y tarea abierta; contadores (pendientes, entregas, con nota, tareas abiertas), pendientes y fechas, entregas y notas con su estado, tareas abiertas, decisiones vigentes, resúmenes de clase y el cuadro **Copiar contexto**: el resumen de la materia en texto plano (fechas en hora de Colombia), listo para pegar al empezar el chat de su Project (incluye la nota actual y los comentarios del profesor de Canvas). Con datos de Canvas: contador **Nota en Canvas**, aviso de mensajes sin leer con enlace a la bandeja de Canvas y el cuadro **Comentarios del profesor** (texto y rúbrica de cada entrega). | `subject-brief` y datos de Canvas |
 | **Mapa de la materia** (`/panel/materia/MAT-…/mapa`) | Desde la tarjeta **Mapa de la materia** de cada materia. El resumen del mapa, sus diagramas (mapa mental, conceptual, de flujo…) dibujados con Mermaid, el árbol de temas con su eje, su explicación y sus **fuentes** (la cita real y su `fuente_id`) y la lista **Cómo se relacionan**. Sin mapa, explica cómo pedírselo a Claude. También desde el celular. | Tabla `mapas` ([33](33-escritura-desde-chat.md), acción `map`; [43](43-conector-claude.md), `guardar_mapa`) |
@@ -58,7 +58,7 @@ Nunca se muestra el texto de un error ni una página de fallo interno; el regist
 
 ## Sincronizar ahora
 
-En «Hoy» (arriba) y en «Resumen» (tarjeta «Sincronización con Canvas») aparece la última sincronización y el botón **Sincronizar ahora**. Ejecuta la misma rutina que la tarea diaria (`scripts/canvas-daily.ps1`: Canvas → base publicada en Drive, material de estudio e índice), como proceso aparte y sin ventana, con la carpeta de datos de esta instalación. Deja el mismo `latest-status.json` y el mismo historial, así que el panel muestra el resultado como cualquier sincronización.
+En «Mi semana» (al lado) aparece la última sincronización y el botón **Sincronizar ahora**. Ejecuta la misma rutina que la tarea diaria (`scripts/canvas-daily.ps1`: Canvas → base publicada en Drive, material de estudio e índice), como proceso aparte y sin ventana, con la carpeta de datos de esta instalación. Deja el mismo `latest-status.json` y el mismo historial, así que el panel muestra el resultado como cualquier sincronización.
 
 - `POST /panel/sincronizar` la lanza y abre **Sincronizando…** (`GET /panel/sincronizar`), que se recarga cada 3 segundos sin scripts hasta decir **Listo** o explicar el problema. Se puede cerrar la página: la sincronización sigue.
 - Mientras corre una sincronización manual, el botón se cambia por el enlace al progreso y no se lanza otra. Si coincide con la programada, los bloqueos de `canvas_sync` lo impiden y se informa que la base estaba ocupada.
@@ -71,8 +71,8 @@ Usa el mismo contrato que el chat ([33-escritura-desde-chat.md](33-escritura-des
 
 | Dónde | Botón | Acción del contrato |
 |---|---|---|
-| Hoy y la página de la materia, en cada actividad pendiente | **Marcar como entregada**; **Poner nota o cambiar estado** (estado, nota, puntos, comentario) | `track` |
-| Hoy y la página de la materia, en cada tarea | **Marcar como hecha**; **Otro estado** | `task-status` |
+| Mi semana y la página de la materia, en cada actividad pendiente | **Marcar como entregada**; **Poner nota o cambiar estado** (estado, nota, puntos, comentario) | `track` |
+| Mi semana y la página de la materia, en cada tarea | **Marcar como hecha**; **Otro estado** | `task-status` |
 | Página de la materia, «Entregas y notas» | **Cambiar** (con los valores actuales ya escritos) | `track` |
 | Página de la materia | **Nueva tarea** (título, fecha límite, detalle) | `task` |
 | Página de la materia | **Nueva decisión o nota** (decisión, nota o aclaración) | `note` |

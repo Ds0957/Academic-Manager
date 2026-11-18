@@ -10,7 +10,7 @@ Es un servidor **MCP** (Model Context Protocol) local: Claude Desktop lo abre en
 
 ## Herramientas
 
-Todas son **de solo lectura** salvo `procesar_clase`, `importar_transcripciones`, `completar_clase`, `guardar_mapa` y `guardar_indice_clase`. Estas dos últimas guardan el mapa de una materia y el índice de una clase con vista previa y aprobación (ver más abajo). Las de lectura no escriben en la base, en Drive ni en archivos. Usan los mismos lectores que el chat y el panel ([27](27-contrato-consulta-academica.md), [34](34-today.md), [35](35-summary.md), [36](36-anomalias.md), [41](41-panel.md)).
+Todas son **de solo lectura** salvo `procesar_clase`, `iniciar_sesion_google`, `importar_transcripciones`, `completar_clase`, `guardar_mapa` y `guardar_indice_clase`. Estas dos últimas guardan el mapa de una materia y el índice de una clase con vista previa y aprobación (ver más abajo). Las de lectura no escriben en la base, en Drive ni en archivos. Usan los mismos lectores que el chat y el panel ([27](27-contrato-consulta-academica.md), [34](34-today.md), [35](35-summary.md), [36](36-anomalias.md), [41](41-panel.md)).
 
 | Herramienta | Qué devuelve |
 |---|---|
@@ -27,6 +27,7 @@ Todas son **de solo lectura** salvo `procesar_clase`, `importar_transcripciones`
 | `anomalias` | Problemas detectados en los datos (opcional `materia`). |
 | `mapa` | Mapa de estudio guardado de una materia (`materia`): temas con explicación y citas, relaciones y diagramas Mermaid. Sin mapa, lo dice y sugiere crearlo. |
 | `guardar_mapa` | **Escribe.** Guarda el mapa de una materia (`materia`, `mapa`; para guardar, además `plan_id` y `aprobar: true`). |
+| `iniciar_sesion_google` | **Abre el navegador.** Renueva la sesión de Google de Academic Manager cuando venció (`GOOGLE_LOGIN`); con `consultar: true` solo muestra el resultado. |
 | `indice_clase` | Índice guardado de una clase (`clase`): un resumen muy corto y los minutos de cada tema. Sin índice, lo dice y sugiere crearlo. |
 | `guardar_indice_clase` | **Escribe.** Guarda el índice de una clase (`clase`, `indice`; para guardar, además `plan_id` y `aprobar: true`). |
 | `capturas` | Proceso en curso y últimos trabajos de Capture: fase, avance, publicación y registro (`limite`). |
@@ -35,6 +36,10 @@ Todas son **de solo lectura** salvo `procesar_clase`, `importar_transcripciones`
 | `transcripciones_descargadas` | Transcripciones `.vtt` en Descargas, bajadas con el botón «Transcripción de Drive»: archivo, grabación, fecha, enlace y si ya está procesada. |
 | `importar_transcripciones` | **Escribe.** Crea clases desde esas transcripciones, sin descargar el video (`archivos`, `materia`; para empezar, además `plan_id` y `aprobar: true`). |
 | `completar_clase` | **Escribe.** Guarda el índice de la clase, la publica y la registra (`trabajo`, `indice`; para empezar, además `plan_id` y `aprobar: true`). |
+
+### `iniciar_sesion_google`: renovar la sesión de Google desde el chat
+
+Cuando `procesar_clase` responde `GOOGLE_LOGIN`, Claude pregunta si la persona está frente al PC y llama `iniciar_sesion_google`. Academic Manager lanza en un proceso aparte el mismo inicio de sesión del asistente (todos los permisos: Drive y Calendar): Google se abre en el navegador de este PC y la persona elige la cuenta y autoriza allí; el chat nunca ve la contraseña ni el token. Claude consulta con `consultar: true` hasta que `estado` sea `listo` o `error` (3 minutos de espera; un pedido sin terminar pasa a `error`, y si el proceso no llegó a arrancar, a los 30 segundos) y entonces reintenta. Mientras uno espera, otra llamada no abre un segundo inicio de sesión. Necesita el archivo del cliente de Google subido en el paso de Google del asistente (`NO_CLIENT` si falta) y solo funciona en Windows. El resultado queda en `procesamiento/google-login/estado.json`, sin el detalle del error.
 
 ### `procesar_clase` y `completar_clase`: una clase de principio a fin
 
@@ -65,7 +70,7 @@ Controles (`academic_operations/class_capture.py`):
 - Si el nombre de la grabación trae una fecha distinta de la indicada, o la grabación ya está transcrita, no empieza.
 - Si el archivo de Drive cambia entre la vista previa y la aprobación, el `plan_id` deja de valer.
 - Si el proceso muere, su bloqueo del sistema se libera y `capturas` lo muestra como interrumpido.
-- Capture usa su propio inicio de sesión de Drive, no el conector de Google Drive de Claude.
+- Capture usa su propio inicio de sesión de Drive, no el conector de Google Drive de Claude. Si esa sesión no existe, venció o fue revocada, `procesar_clase` responde `GOOGLE_LOGIN` (no es un problema del enlace). Se renueva desde el chat con `iniciar_sesion_google` o en el asistente, paso de Google, «Volver a iniciar sesión». Con el cliente OAuth en modo «Prueba» de Google Cloud, Google vence la sesión a los 7 días; en modo «En producción» no.
 
 ### `guardar_mapa`: el mapa de la materia
 
@@ -141,7 +146,7 @@ La misma página trae la tarjeta **Proyectos de Claude**: un cuadro para el Coor
 3. Para registrar entregas, notas, tareas o decisiones, usar Academic Manager: el panel o, cuando existan, las herramientas de escritura del conector, con vista previa y aprobación.
 4. Para estudiar una materia, consultar su `mapa`; si no tiene, ofrecer crearlo con `guardar_mapa` desde el material real, mostrar el resumen y los diagramas y guardarlo solo con aprobación.
 5. Para saber en qué minuto de una clase se habló de algo, consultar `indice_clase`; si no tiene, ofrecer crearlo con `guardar_indice_clase` desde su transcripción y guardarlo solo con aprobación.
-6. Para procesar una clase grabada, usar `procesar_clase`, seguirla con `capturas`, leerla con `leer_transcripcion` y terminar con `completar_clase`, que guarda su índice, sin escribir un análisis aparte, con vista previa y aprobación en cada paso.
+6. Para procesar una clase grabada, usar `procesar_clase`, seguirla con `capturas`, leerla con `leer_transcripcion` y terminar con `completar_clase`, que guarda su índice, sin escribir un análisis aparte, con vista previa y aprobación en cada paso. Si la sesión de Google venció, ofrecer renovarla con `iniciar_sesion_google` y después reintentar.
 7. Aunque Claude tenga Desktop Commander u otro acceso a los archivos del PC, **nunca** editar directamente los datos, la base de datos ni los archivos de Academic Manager.
 
 Desktop Commander sigue conectado y funcionando igual; estas instrucciones solo evitan que se use para cambiar los datos de Academic Manager por fuera de sus controles.

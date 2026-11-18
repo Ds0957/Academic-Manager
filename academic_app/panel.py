@@ -256,12 +256,21 @@ def warnings(summary):
 
 
 # --- HTML ------------------------------------------------------------------------------
-NAV = (("hoy", "Hoy", "/panel"), ("resumen", "Resumen", "/panel/resumen"),
+NAV = (("semana", "Mi semana", "/panel"), ("clases", "Clases", "/panel/clases"),
        ("materias", "Materias", "/panel/materias"), ("instrucciones", "Instrucciones", "/panel/instrucciones"),
        ("configuracion", "Configuración", "/"))
 
 
-PHONE_TABS = ("hoy", "resumen", "materias", "instrucciones")
+PHONE_TABS = ("semana", "clases", "materias", "instrucciones")
+# Estados de una clase (academic_access.week): nombre visible y color, en el orden de «Clases».
+CLASS_STATES = {"con_error": ("Con error", "k-bad"), "procesando": ("Procesando", "k-info"),
+                "falta_indice": ("Transcrita, falta el índice", "k-todo"),
+                "sin_transcripcion": ("Sin transcripción", "k-todo"),
+                "solo_transcripcion": ("Solo transcripción", "k-todo"),
+                "en_cola": ("En cola", "k-info"),
+                "sin_grabacion": ("Sin grabación todavía", "k-todo"),
+                "lista": ("Lista para estudiar", "k-ok")}
+CLASS_ORDER = tuple(CLASS_STATES)
 # Desde el celular no hay Configuración: en su lugar, «Salir» (sin CSRF: el escuchador del
 # celular exige Origin y la cookie es SameSite=Strict, ver phone.py).
 PHONE_EXIT = ('<form method="post" action="/salir" class="inline-form">'
@@ -407,6 +416,31 @@ def items_list(items, names, tones, today, grouped=False, actions=None):
             html.append(f'<h2 class="group-title{mark}">{esc(title)} <span class="count">{len(group)}</span></h2>'
                         + items_list(group, names, tones, today, actions=actions))
     return "".join(html)
+
+
+def class_rows(items, names, tones, today, hide=None):
+    """Clases con su estado y el paso siguiente; las listas enlazan a su página con el índice.
+
+    `hide(item)` devuelve el botón para quitar de la lista un trabajo que no es una clase."""
+    if not items:
+        return ""
+    rows = []
+    for item in items:
+        subject = item.get("materia_id")
+        label, kind = CLASS_STATES.get(item["estado"], ("Clase", ""))
+        title = esc(item.get("titulo") or "Clase sin título")
+        if item["estado"] == "lista" and item.get("clase_id") and subject in names:
+            title = f'<a href="/panel/materia/{esc(subject)}/clase/{esc(item["clase_id"])}">{title}</a>'
+        when = relative(item.get("fecha"), today) or day_text(item.get("fecha")) or "sin fecha"
+        link = item.get("enlace") if item["estado"] == "solo_transcripcion" else None
+        if link and link.startswith("https://drive.google.com/file/d/"):
+            title += f' · <a href="{esc(link)}" target="_blank" rel="noopener noreferrer">Abrir grabación</a>'
+        rows.append(f'<li class="{esc(tones.get(subject, ""))}">'
+                    f'{avatar(names.get(subject) or item.get("materia") or subject, tones.get(subject, ""))}'
+                    f'<div class="grow">{title}<small>{subject_link(subject, names, tones)} · {esc(when)}</small>'
+                    f'<small class="muted">{esc(item.get("siguiente_paso") or "")}</small></div>'
+                    f'{chip(label, kind)}{hide(item) if hide else ""}</li>')
+    return '<ul class="rows class-rows">' + "".join(rows) + "</ul>"
 
 
 def stat(number, label, kind=""):

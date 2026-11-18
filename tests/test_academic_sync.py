@@ -116,8 +116,8 @@ class PagesTests(PanelCase):
         self.sync_status = MagicMock(side_effect=lambda runtime: dict(self.state))
         self.wizard.deps.update(sync_start=self.sync_start, sync_status=self.sync_status)
 
-    def test_today_and_summary_offer_the_button(self):
-        for path in ("/panel", "/panel/resumen"):
+    def test_my_week_offers_the_button(self):
+        for path in ("/panel",):
             body = self.get(path)[2]
             self.assertIn('action="/panel/sincronizar"', body)
             self.assertIn("Sincronizar ahora", body)

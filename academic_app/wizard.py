@@ -121,7 +121,7 @@ def _defaults():
     from canvas_sync import semester, workbook_enrollment
     from capture.sources import auth as drive_auth
     from . import updates
-    from academic_access import brief, canvas, core, summary, today
+    from academic_access import brief, canvas, core, summary, today, week
     from academic_projects.__main__ import render_all
     from canvas_sync.routine import workbook_version
     from academic_operations import chat
@@ -129,6 +129,7 @@ def _defaults():
     return {"write_preview": chat.preview, "write_apply": chat.apply,
             "sync_start": manual_sync.start, "sync_status": manual_sync.status,
             "panel_today": today.today, "panel_summary": summary.summary,
+            "panel_week": week.week, "panel_classes": week.classes, "panel_hide_class": week.set_hidden,
             "panel_brief": brief.subject_brief, "panel_instructions": render_all,
             "panel_canvas": canvas.canvas_extras, "panel_map": core.subject_map,
             "panel_class_index": core.class_index, "panel_class_indexes": core.class_indexes,
@@ -355,6 +356,11 @@ class Wizard:
         if token is not None and token.is_file():
             when = datetime.fromtimestamp(token.stat().st_mtime)
             text = f"Sesión de Google iniciada el {when:%Y-%m-%d %H:%M}."
+            from academic_operations import calendar_classes
+            calendar = calendar_classes.last(runtime) or {}
+            if calendar.get("estado") == "sin_permiso":
+                text += (" Para ver su horario de clases y sus grabaciones de Google Calendar, pulse «Volver a "
+                         "iniciar sesión» y marque también el permiso de Calendar.")
             if (datetime.now() - when).days >= RELOGIN_HINT_DAYS:
                 text += " Si Capture dice que la autorización caducó, pulse «Volver a iniciar sesión»."
             return "hecho", text
@@ -417,7 +423,10 @@ class Wizard:
 
     def _dispatch(self, method, path, form, files, csrf):
         routes = {("GET", "/"): self.entry, ("POST", "/cerrar"): self.close,
-                  ("GET", "/panel"): self.panel_today, ("GET", "/panel/resumen"): self.panel_summary,
+                  ("GET", "/panel"): self.panel_week, ("GET", "/panel/resumen"): self.panel_summary,
+                  ("GET", "/panel/clases"): self.panel_classes,
+                  ("POST", "/panel/clases/quitar"): self.panel_hide_class,
+                  ("POST", "/panel/clases/mostrar"): self.panel_show_class,
                   ("GET", "/panel/materias"): self.panel_subjects,
                   ("GET", "/panel/instrucciones"): self.panel_instructions,
                   ("POST", "/panel/sincronizar"): self.sync_now,
@@ -1190,91 +1199,115 @@ class Wizard:
         return ('<div class="card"><h2>Notas nuevas en Canvas</h2><p class="muted">Calificadas en los últimos '
                 f'{canvas_days()} días, según la última sincronización.</p><ul class="rows">{rows}</ul></div>')
 
-    def panel_today(self, csrf, **_):
+    def panel_week(self, csrf, **_):
+        """«Mi semana»: clases por atender y entregas de los próximos 7 días; debajo, lo demás."""
         runtime = self._panel_runtime()
         if runtime is None:
-            return self._panel_setup("hoy", "Hoy", csrf)
-        today = self._read("panel_today", runtime)
+            return self._panel_setup("semana", "Mi semana", csrf)
+        week = self._read("panel_week", runtime)
         summary = self._read("panel_summary", runtime)
         names, tones = panel.names_of(summary.value), panel.tones_of(summary.value)
-        body = "".join(notice(text) for text in (panel.warnings(summary.value) if summary.value else []))
+        body = self._take_flash() + "".join(notice(text) for text in (panel.warnings(summary.value)
+                                                                      if summary.value else []))
+        if week.problem:
+            return self._panel("semana", "Mi semana", body + self._problem_card(week), csrf)
+        data, day = week.value, week.value["fecha"]
+        counts = data["resumen"]
+        body += panel.stats((counts["clases_por_atender"], "Clases por atender", "k-todo"),
+                            (counts["clases_listas"], "Listas para estudiar", "k-ok"),
+                            (counts["entregas"], "Entregas esta semana", "k-info"),
+                            (counts["atrasadas"], "Atrasadas", "k-bad"))
+        on_pc = not self._on_phone()
+        classes = (panel.class_rows(data["clases"], names, tones, day,
+                                    hide=self._hide_form(csrf, "/panel") if on_pc else None)
+                   or panel.empty("Ninguna clase pendiente", "Todas las clases de estos días tienen su índice."))
+        deliveries = (panel.items_list(data["entregas"], names, tones, day,
+                                       actions=forms.item_actions(csrf, "/panel"))
+                      or panel.empty("Nada que entregar esta semana", "No hay entregas atrasadas ni en los "
+                                                                       "próximos 7 días."))
+        main = (f'<section class="card"><h2>Clases por atender</h2>{classes}'
+                '<a class="more" href="/panel/clases">Ver todas las clases →</a></section>'
+                f'<h2>Entregas de la semana</h2>{deliveries}')
+        side = ""
+        if names:
+            side += self._new_grades(self._canvas(runtime), names, tones)
         if summary.value:
-            body += self._sync_card(runtime, csrf, summary.value.get("sistema"), compact=True)
-        subtitle = ""
-        if today.problem:
-            body += self._problem_card(today)
-        else:
-            day = today.value["fecha"]
-            subtitle = (panel.day_text(day) or "").capitalize()
-            items = today.value["items"]
-            spread = [panel.bucket(i, day) for i in items]
-            body += panel.stats((spread.count("atrasado"), "Atrasado", "k-bad"),
-                                (sum(b in ("hoy", "manana", "semana") for b in spread), "Esta semana", "k-info"),
-                                (spread.count("despues"), "Más adelante", "k-task"),
-                                (spread.count("sin"), "Sin fecha", "k-todo"))
-            if names:
-                body += self._new_grades(self._canvas(runtime), names, tones)
-            if items:
-                body += ('<p class="muted">Agrupado por fecha; dentro de cada grupo, primero lo más urgente. '
-                         'Para marcar algo como hecho, use los botones de cada tarjeta: antes de guardar verá una vista '
-                         'previa.</p>'
-                         + panel.items_list(items, names, tones, day, grouped=True,
-                                            actions=forms.item_actions(csrf, "/panel")))
-            else:
-                days = panel.count(today.value.get("dias", 14), "día", "días")
-                body += panel.empty("Todo al día", f"No hay nada pendiente para los próximos {days}.")
-        return self._panel("hoy", "Hoy", body, csrf, subtitle=subtitle)
+            side += self._sync_card(runtime, csrf, summary.value.get("sistema"), compact=True)
+        later = data["otros"]
+        rest = ""
+        if later:
+            rest = (f'<details class="card more-items"><summary>Más adelante, tareas y avisos '
+                    f'<span class="count">{len(later)}</span></summary>'
+                    + panel.items_list(later, names, tones, day, grouped=True,
+                                       actions=forms.item_actions(csrf, "/panel")) + "</details>")
+        body += f'<div class="grid"><div>{main}{rest}</div><aside>{side}</aside></div>'
+        subtitle = f"Del {panel.day_text(day)} al {panel.day_text(data['hasta'])}."
+        return self._panel("semana", "Mi semana", body, csrf, subtitle=subtitle)
 
     def panel_summary(self, csrf, **_):
+        """«Resumen» se unió a «Mi semana»: los enlaces y marcadores viejos llevan allí."""
+        return Response(303, location="/panel")
+
+    def _hide_form(self, csrf, back):
+        def form(item, show=False):
+            if item.get("trabajo") is None:
+                return ""
+            label = "Volver a mostrar" if show else "Quitar de la lista"
+            title = "" if show else ' title="Para lo que no es una clase, como el video de un trabajo"'
+            return (f'<form method="post" action="/panel/clases/{"mostrar" if show else "quitar"}" '
+                    f'class="inline-form">{csrf_field(csrf)}<input type="hidden" name="trabajo" '
+                    f'value="{esc(item["trabajo"])}"><input type="hidden" name="volver" value="{esc(back)}">'
+                    f'<button class="small secondary"{title}>{label}</button></form>')
+        return form
+
+    def panel_classes(self, csrf, **_):
+        """«Clases»: todas las del semestre, agrupadas por estado."""
         runtime = self._panel_runtime()
         if runtime is None:
-            return self._panel_setup("resumen", "Resumen", csrf)
+            return self._panel_setup("clases", "Clases", csrf)
+        found = self._read("panel_classes", runtime)
         summary = self._read("panel_summary", runtime)
-        if summary.problem:
-            return self._panel("resumen", "Resumen", self._problem_card(summary), csrf)
-        data = summary.value
-        day = data["fecha"]
-        names, tones = panel.names_of(data), panel.tones_of(data)
-        term = data["semestre"]
-        block = f" · bloque {term['bloque_activo']}" if term.get("bloque_activo") else ""
-        kinds = data["urgente"].get("resumen") or {}
-        hero = (f'<section class="card hero"><div><p class="eyebrow">Semestre activo</p>'
-                f'<h2>{esc(term.get("nombre") or term["semestre_id"])}</h2>'
-                f'<p class="muted">{esc(term["semestre_id"])}{esc(block)} · '
-                f'{esc(panel.count(len(data["materias"]), "materia", "materias"))}</p></div>'
-                + panel.stats((kinds.get("actividad_vencida", 0), "Vencidas", "k-bad"),
-                              (kinds.get("actividad_proxima", 0), "Por entregar", "k-info"),
-                              (kinds.get("tarea", 0) + kinds.get("tarea_sin_fecha", 0), "Tareas", "k-task"),
-                              (kinds.get("clase_sin_procesar", 0), "Clases sin procesar", "k-todo"))
-                + "</section>")
-        urgent = data["urgente"]["items"]
-        main = ('<h2>Lo más urgente</h2>'
-                + (panel.items_list(urgent, names, tones, day) if urgent
-                   else panel.empty("Nada urgente", "No hay entregas ni tareas que apremien."))
-                + '<a class="more" href="/panel">Ver todo en «Hoy» →</a>')
-        extras = self._canvas(runtime)
-        subjects = "".join(
-            f'<li>{panel.avatar(names[m["materia_id"]], tones[m["materia_id"]])}<div class="grow">'
-            f'<a href="/panel/materia/{esc(m["materia_id"])}">{esc(names[m["materia_id"]])}</a>'
-            f'<small>Última clase: {esc(_last_class(m.get("ultima_clase"), day))}</small></div>'
-            f'{panel.canvas_chips(panel.canvas_subject(extras, m["materia_id"]))}</li>'
-            for m in data["materias"])
-        notes = "".join(f'<li class="{esc(tones.get(n["materia_id"], ""))}">{esc(n["texto"])}'
-                        f'<small>{esc(names.get(n["materia_id"], n["materia_id"]))} · '
-                        f'{esc(panel.day_text(n.get("fecha")) or "sin fecha")}</small></li>'
-                        for n in data["reciente"]["notas"])
-        tasks = "".join(f'<li><div class="grow">{esc(t["titulo"])}<small>'
-                        + esc(f"fecha límite {panel.day_text(t['fecha_limite'])}" if t.get("fecha_limite")
-                              else "sin fecha límite") + "</small></div></li>"
-                        for t in data["reciente"]["tareas"])
-        side = (f'<div class="card"><h2>Sus materias</h2><ul class="rows">{subjects}</ul></div>'
-                + (f'<div class="card"><h2>Notas recientes</h2><ul class="timeline">{notes}</ul></div>'
-                   if notes else "")
-                + (f'<div class="card"><h2>Tareas abiertas</h2><ul class="rows">{tasks}</ul></div>' if tasks else "")
-                + self._sync_card(runtime, csrf, data["sistema"]))
-        body = ("".join(notice(text) for text in panel.warnings(data)) + hero
-                + f'<div class="grid"><div>{main}</div><aside>{side}</aside></div>')
-        return self._panel("resumen", "Resumen", body, csrf, subtitle=f"Hoy es {panel.day_text(day)}.")
+        names, tones = panel.names_of(summary.value), panel.tones_of(summary.value)
+        if found.problem:
+            return self._panel("clases", "Clases", self._problem_card(found), csrf)
+        data, day = found.value, found.value["fecha"]
+        hide = self._hide_form(csrf, "/panel/clases") if not self._on_phone() else None
+        body = self._take_flash()
+        groups = [(state, [c for c in data["clases"] if c["estado"] == state]) for state in panel.CLASS_ORDER]
+        body += panel.stats(*[(len(items), panel.CLASS_STATES[state][0], panel.CLASS_STATES[state][1])
+                              for state, items in groups if items] or [(0, "Clases", "")])
+        for state, items in groups:
+            if items:
+                body += (f'<h2 class="group-title">{esc(panel.CLASS_STATES[state][0])} '
+                         f'<span class="count">{len(items)}</span></h2>'
+                         + panel.class_rows(items, names, tones, day, hide=hide))
+        if not data["clases"]:
+            body += panel.empty("Todavía no hay clases", "Pídale a Claude que procese la primera grabación.")
+        if data["quitadas"] and hide:
+            show = lambda item: hide(item, show=True)  # noqa: E731
+            body += (f'<details class="card more-items"><summary>Quitadas de la lista '
+                     f'<span class="count">{len(data["quitadas"])}</span></summary>'
+                     + panel.class_rows(data["quitadas"], names, tones, day, hide=show) + "</details>")
+        return self._panel("clases", "Clases", body, csrf,
+                           subtitle="Todas las clases del semestre, de la más reciente a la más antigua.")
+
+    def panel_hide_class(self, csrf, form=None, **_):
+        return self._set_hidden(form, True)
+
+    def panel_show_class(self, csrf, form=None, **_):
+        return self._set_hidden(form, False)
+
+    def _set_hidden(self, form, hide):
+        runtime = self._panel_runtime()
+        first = lambda name: ((form or {}).get(name) or [""])[0]  # noqa: E731
+        back = first("volver") if first("volver") in ("/panel", "/panel/clases") else "/panel/clases"
+        if runtime is None:
+            return Response(303, location="/")
+        result = self._read("panel_hide_class", runtime, first("trabajo"), hide)
+        if result.problem:
+            return self._done(back, "No se pudo cambiar la lista de clases. Recargue la página e inténtelo otra vez.")
+        return self._done(back, "Listo: se quitó de la lista. Puede volver a mostrarla en «Clases»." if hide
+                          else "Listo: volvió a la lista de clases.")
 
     def panel_subjects(self, csrf, **_):
         runtime = self._panel_runtime()
@@ -1506,7 +1539,7 @@ class Wizard:
         if runtime is None:
             return self._panel_setup("hoy", "Sincronizar con Canvas", csrf)
         state = self.deps["sync_status"](runtime)
-        back = '<p><a href="/panel">← Volver a «Hoy»</a></p>'
+        back = '<p><a href="/panel">← Volver a «Mi semana»</a></p>'
         if state.get("estado") == "sincronizando":
             body = ('<div class="card msg" role="status"><p><span class="spinner" aria-hidden="true"></span>'
                     'Sincronizando con Canvas… Trae actividades, notas y material, publica la base en Drive y '
@@ -1891,7 +1924,8 @@ CLAUDE_INSTRUCTIONS = (
     "6. Para procesar una clase grabada, usa procesar_clase con su enlace de Google Drive, sigue el avance con "
     "capturas, lee la transcripción con leer_transcripcion y termina con completar_clase, que guarda su índice "
     "por minutos: no escribas un análisis aparte. No me digas que lo haga yo: muéstrame la vista previa de cada "
-    "paso y sigue solo si lo apruebo.\n"
+    "paso y sigue solo si lo apruebo. Si Academic Manager dice que la sesión de Google venció, ofréceme "
+    "renovarla con iniciar_sesion_google y después reintenta.\n"
     "7. Aunque tengas Desktop Commander u otro acceso a los archivos del PC, nunca edites directamente los "
     "datos, la base de datos ni los archivos de Academic Manager.")
 CLAUDE_PROJECTS = ("Cree un proyecto en Claude para el Coordinador y otro por materia: cada proyecto tiene su "

@@ -586,6 +586,31 @@ class GoogleWriteLoginTests(ServerCase):
         self.assertEqual(self.wizard.status()["google"][0], "hecho")
 
 
+class CalendarPermissionNoticeTests(ServerCase):
+    """odd/tasks/clases-automaticas.md, S5: sin el permiso de Calendar, el paso sigue «hecho» y lo explica."""
+
+    def logged_in(self):
+        self.choose_data_folder()
+        self.upload("/paso/google/cliente", json.dumps(desktop_client()).encode())
+        drive_auth.token_path(self.data).write_text("{}", encoding="utf-8")
+        drive_auth.write_token_path(self.data).write_text("{}", encoding="utf-8")
+
+    def test_missing_calendar_permission_is_explained_without_blocking(self):
+        from academic_operations import calendar_classes
+        self.logged_in()
+        folder = self.data / calendar_classes.FOLDER
+        folder.mkdir(parents=True)
+        (folder / calendar_classes.LAST).write_text(json.dumps({"estado": "sin_permiso", "mensaje": "x"}),
+                                                    encoding="utf-8")
+        state, detail = self.wizard.status()["google"]
+        self.assertEqual(state, "hecho")
+        self.assertIn("permiso de Calendar", detail)
+
+    def test_no_calendar_notice_when_it_works_or_was_never_read(self):
+        self.logged_in()
+        self.assertNotIn("Calendar", self.wizard.status()["google"][1])
+
+
 class DriveFolderTests(ServerCase):
     def test_existing_folder_is_saved(self):
         self.choose_data_folder()

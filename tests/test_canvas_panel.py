@@ -141,8 +141,8 @@ class CanvasPanelPagesTests(PanelCase):
         self.assertNotIn("0 mensajes sin leer", body)
         self.assert_plain(body)
 
-    def test_summary_page_shows_grade(self):
-        body = self.get("/panel/resumen")[2]
+    def test_subjects_page_shows_grade(self):
+        body = self.get("/panel/materias")[2]
         self.assertIn("Nota 84.5 %", body)
         self.assert_plain(body)
 
@@ -162,7 +162,7 @@ class CanvasPanelPagesTests(PanelCase):
 
     def test_pages_work_when_canvas_data_fails(self):
         self.canvas.side_effect = SyncError("Snapshot Canvas no supera comprobación SHA-256.")
-        for path in ("/panel", "/panel/resumen", "/panel/materias", "/panel/materia/MAT-GBD"):
+        for path in ("/panel", "/panel/clases", "/panel/materias", "/panel/materia/MAT-GBD"):
             status, _, body = self.get(path)
             self.assertEqual(status, 200)
             self.assertNotIn("SHA-256", body)

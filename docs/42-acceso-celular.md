@@ -4,9 +4,9 @@
 
 ## Para qué sirve
 
-Abre el panel del día a día ([41-panel.md](41-panel.md)) desde el celular, conectado al **mismo Wi-Fi** que el PC: ver **Hoy, Resumen, Materias e Instrucciones** y **registrar** entregas, notas, tareas y decisiones con la misma vista previa y «Aprobar y publicar». Viene **apagado**: el PC solo escucha la red mientras usted lo tenga activado y Academic Manager esté abierto.
+Abre el panel del día a día ([41-panel.md](41-panel.md)) desde el celular, conectado al **mismo Wi-Fi** que el PC: ver **Mi semana, Clases, Materias e Instrucciones** y **registrar** entregas, notas, tareas y decisiones con la misma vista previa y «Aprobar y publicar». Viene **apagado**: el PC solo escucha la red mientras usted lo tenga activado y Academic Manager esté abierto.
 
-El celular no puede: abrir Configuración, cerrar Academic Manager, actualizarlo, pulsar «Sincronizar ahora» ni hacer los pasos de Canvas o Google. Esas páginas responden «No disponible desde el celular». En el celular el menú muestra solo Hoy · Resumen · Materias · Instrucciones y **Salir**.
+El celular no puede: abrir Configuración, cerrar Academic Manager, actualizarlo, pulsar «Sincronizar ahora» ni hacer los pasos de Canvas o Google. Esas páginas responden «No disponible desde el celular». En el celular el menú muestra solo Mi semana · Clases · Materias · Instrucciones y **Salir** (quitar una clase de la lista se hace en el PC).
 
 ## Cómo activarlo
 
